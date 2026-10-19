@@ -1,0 +1,21 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+datasets = "*"
+google-genai = "*"
+huggingface-hub = "*"
+pyarrow = "*"
+python-dotenv = "*"
+pyyaml = "==6.0.3"
+torch = "*"
+transformers = "*"
+
+[dev-packages]
+pytest = "*"
+
+[requires]
+python_version = "3.13"
+python_full_version = "3.13.1"
