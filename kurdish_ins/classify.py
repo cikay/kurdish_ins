@@ -6,6 +6,7 @@ pairs is a later stage's job, so changing that rule never means classifying agai
 
 import json
 from collections import Counter
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -51,17 +52,19 @@ class ClassifyStage(Stage):
         print(f"       → {output_dir}/manifest.jsonl")
 
     def classify(self, entries, classifier):
-        """Yield one manifest record per entry."""
-        for entry in entries:
-            labels, scores = classifier.classify(entry["text"])
-            yield {
-                "id": entry["id"],
-                "url": entry["url"],
-                "domain": urlparse(entry["url"]).netloc,
-                "text": entry["text"],
-                "register_labels": labels,
-                "register_scores": scores,
-            }
+        """Yield one manifest record per entry, classifying `batch_size` entries at a time."""
+        entries = iter(entries)
+        while batch := list(islice(entries, self._batch_size)):
+            results = classifier.classify([entry["text"] for entry in batch])
+            for entry, (labels, scores) in zip(batch, results):
+                yield {
+                    "id": entry["id"],
+                    "url": entry["url"],
+                    "domain": urlparse(entry["url"]).netloc,
+                    "text": entry["text"],
+                    "register_labels": labels,
+                    "register_scores": scores,
+                }
 
     def _entries(self):
         if self._input_file:
