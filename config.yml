@@ -13,8 +13,9 @@ classify:
   # predicted when its sigmoid score is above this. Every score is written to the
   # manifest too, so a later stage can re-threshold without classifying again.
   threshold: 0.5
-  # Windows (see max_length) per model call. Entries are classified one at a time, so this
-  # only matters for an entry longer than one window.
+  # Entries classified at a time, and windows (see max_length) per model call. The windows
+  # of all the entries go through the model together, so a batch is full even when most
+  # entries fit in one window. Raise it on a GPU.
   batch_size: 8
   # Tokens per window. The classifier reads one window at a time, so a longer entry is cut
   # into windows and each label's score is averaged over them. 512 is XLM-R's limit: it

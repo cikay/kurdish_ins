@@ -71,7 +71,7 @@ Settings in `config.yml`:
 | `subset`     | FineWeb2 subset                                               |
 | `input_file` | JSONL of entries to classify instead, e.g. `data/sample.jsonl`; `null` means the whole subset |
 | `threshold`  | a register is predicted when its score is above this          |
-| `batch_size` | windows per model call; entries are classified one at a time  |
+| `batch_size` | entries classified at a time, and windows per model call      |
 | `max_length` | tokens per window; 512 is XLM-R's limit                       |
 | `stride`     | tokens neighbouring windows share; 0 means no overlap         |
 

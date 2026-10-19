@@ -1,25 +1,26 @@
 import pytest
+import torch
 import yaml
 
 from kurdish_ins.classify import ClassifyStage
-from kurdish_ins.register_classifier import labels_from_scores
+from kurdish_ins.register_classifier import average_by_text, labels_from_scores
 from kurdish_ins.stage import run_name
 
 
-def stage():
+def stage(batch_size=2):
     return ClassifyStage(dataset="d", subset="s", input_file=None, threshold=0.5,
-                         batch_size=2, max_length=512, stride=0)
+                         batch_size=batch_size, max_length=512, stride=0)
 
 
 class FakeClassifier:
-    """Labels every text `IN`/`en`, and records the texts it was given."""
+    """Labels every text `IN`/`en`, and records the batches it was given."""
 
     def __init__(self):
-        self.texts = []
+        self.batches = []
 
-    def classify(self, text):
-        self.texts.append(text)
-        return ["IN", "en"], {"IN": 0.9, "en": 0.8}
+    def classify(self, texts):
+        self.batches.append(texts)
+        return [(["IN", "en"], {"IN": 0.9, "en": 0.8}) for _ in texts]
 
 
 def entry(i):
@@ -34,12 +35,19 @@ class TestLabelsFromScores:
         assert labels_from_scores({"IN": 0.5, "NA": 0.1}, 0.5) == []
 
 
+class TestAverageByText:
+    def test_each_text_is_the_average_of_its_windows(self):
+        probs = torch.tensor([[0.2, 1.0], [0.6, 0.0], [0.9, 0.5]])
+        averaged = average_by_text(probs, torch.tensor([0, 0, 1]), 2)
+        assert torch.allclose(averaged, torch.tensor([[0.4, 0.5], [0.9, 0.5]]))
+
+
 class TestClassify:
-    def test_every_entry_is_classified_in_order(self):
+    def test_entries_are_classified_in_batches(self):
         classifier = FakeClassifier()
-        records = list(stage().classify([entry(i) for i in range(3)], classifier))
-        assert len(records) == 3
-        assert classifier.texts == ["text 0", "text 1", "text 2"]
+        records = list(stage(batch_size=2).classify([entry(i) for i in range(5)], classifier))
+        assert [r["id"] for r in records] == ["id0", "id1", "id2", "id3", "id4"]
+        assert [len(b) for b in classifier.batches] == [2, 2, 1]
 
     def test_record_keeps_text_and_adds_registers(self):
         [record] = stage().classify([entry(1)], FakeClassifier())
