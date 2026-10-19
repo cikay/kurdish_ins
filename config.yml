@@ -1,0 +1,25 @@
+stages:
+  - classify
+
+classify:
+  description: Label each FineWeb2 Kurmanji entry's web register, write manifest.jsonl
+  dataset: HuggingFaceFW/fineweb-2
+  subset: kmr_Latn
+  # A JSONL file of entries to classify instead of the whole subset, e.g. the output of
+  # `python -m scripts.sample_fineweb`. Each line needs `id`, `url` and `text`.
+  # `null` means every entry of `dataset`/`subset`.
+  input_file: data/sample.jsonl
+  # TurkuNLP/web-register-classification-multilingual is multi-label: a register is
+  # predicted when its sigmoid score is above this. Every score is written to the
+  # manifest too, so a later stage can re-threshold without classifying again.
+  threshold: 0.5
+  # Windows (see max_length) per model call. Entries are classified one at a time, so this
+  # only matters for an entry longer than one window.
+  batch_size: 8
+  # Tokens per window. The classifier reads one window at a time, so a longer entry is cut
+  # into windows and each label's score is averaged over them. 512 is XLM-R's limit: it
+  # has position embeddings for 512 tokens and no more.
+  max_length: 512
+  # Tokens neighbouring windows share, so a sentence cut at a window's end is read whole
+  # in the next one too. 0 means windows do not overlap and every token counts once.
+  stride: 0
