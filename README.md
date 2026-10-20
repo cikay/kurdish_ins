@@ -34,6 +34,28 @@ python -m kurdish_ins.classify
 Its settings still come from `config.yml`, so running a stage on its own and running it
 through `pipeline.py` behave the same.
 
+## Running on Modal
+
+`modal_app/app.py` runs a stage on a [Modal](https://modal.com) GPU, with the same stage code
+`pipeline.py` runs locally. `pipenv install` installs Modal; log in once:
+
+```bash
+modal setup
+```
+
+Then, from the repository root:
+
+```bash
+modal volume put kurdish-ins data/sample.jsonl /sample.jsonl   # only when classify.input_file is set
+modal run --detach -m modal_app.app::classify
+modal volume get kurdish-ins /classify data/
+```
+
+The stage's settings come from `config.yml` as usual. The GPU, the timeout and the GPU's
+batch size come from its `modal` block. The volume `kurdish-ins` holds `data/` and the
+Hugging Face cache, so the model and the datasets are downloaded only on the first run.
+Running on Modal bills your Modal account.
+
 ## Pipeline stages
 
 Each stage writes `data/<stage>/<run>/manifest.jsonl`. The next stage reads the same run's
@@ -137,6 +159,7 @@ kurdish_ins/
   register_classifier.py  the register model and its labels
   hub.py               reads a dataset from local parquet files
   logs.py              logging setup
+modal_app/app.py       runs stages on Modal
 scripts/               standalone tools
 tests/
 ```

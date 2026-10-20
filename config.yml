@@ -32,3 +32,19 @@ classify:
   # Tokens neighbouring windows share, so a sentence cut at a window's end is read whole
   # in the next one too. 0 means windows do not overlap and every token counts once.
   stride: 0
+
+# Where each stage runs on Modal (modal_app/app.py). pipeline.py does not read this.
+modal:
+  classify:
+    # An A100 should read all the sources (about 1,000,000 windows: 935,000 from FineWeb2,
+    # 65,000 from the 408 theses) in about 2.5 hours in float32 — an estimate from the
+    # model's arithmetic, not a measurement. A10G is cheaper per hour and about 7 hours;
+    # H100 is about 1.5.
+    gpu: A100
+    # Modal ends the call after this long. Its limit is 24 hours.
+    timeout_minutes: 720
+    # Windows per model call on the GPU, in place of classify.batch_size, which is sized for
+    # the Mac and leaves a big GPU mostly idle. It does not change what is written: the
+    # padding in a batch is masked out, so a window scores the same in any batch, up to
+    # float rounding in the last digits.
+    batch_size: 64
