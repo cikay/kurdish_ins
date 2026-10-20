@@ -90,7 +90,8 @@ A label is written only when its own score is above `threshold`. A sub-register 
 add its main register: `en` alone means `IN` scored below the threshold.
 
 When the run ends, the stage prints its stats for each source: entries, words, entries
-with no label, and how many entries got each main register and sub-register.
+with no label, and how many entries got each main register and sub-register. It also
+writes them to `stats.json`, next to `manifest.jsonl`.
 
 Settings in `config.yml`:
 

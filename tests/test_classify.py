@@ -84,6 +84,15 @@ class TestClassifyStats:
             "  sub-registers   -",
         ])
 
+    def test_to_dict_counts_per_source(self):
+        stats = ClassifyStats()
+        stats.add({"source": "web", "text": "a b c", "register_labels": ["IN", "en"]})
+        stats.add({"source": "web", "text": "d", "register_labels": []})
+        assert stats.to_dict() == {
+            "web": {"entries": 2, "words": 4, "no_label": 1,
+                    "main_registers": {"IN": 1}, "sub_registers": {"en": 1}},
+        }
+
 
 def config(tmp_path, input_file):
     path = tmp_path / "config.yml"

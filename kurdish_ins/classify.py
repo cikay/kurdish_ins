@@ -20,8 +20,8 @@ from kurdish_ins.stage import Stage, load_manifest, run_name, stage_config
 class ClassifyStats:
     """What the stage did, totalled per source.
 
-    Printed when the run ends, so changing `threshold` or `max_length` in `config.yml` and
-    running again shows what moved.
+    Printed and saved to `stats.json` when the run ends, so changing `threshold` or
+    `max_length` in `config.yml` and running again shows what moved.
     """
 
     entries: Counter = field(default_factory=Counter)
@@ -36,6 +36,19 @@ class ClassifyStats:
         self.labels[source].update(record["register_labels"])
         if not record["register_labels"]:
             self.unlabelled[source] += 1
+
+    def to_dict(self) -> dict:
+        """The stats as {source: {entries, words, no_label, main_registers, sub_registers}}."""
+        return {
+            source: {
+                "entries": entries,
+                "words": self.words[source],
+                "no_label": self.unlabelled[source],
+                "main_registers": {label: n for label, n in self.labels[source].most_common() if label.isupper()},
+                "sub_registers": {label: n for label, n in self.labels[source].most_common() if label.islower()},
+            }
+            for source, entries in self.entries.items()
+        }
 
     def report(self) -> str:
         lines = []
@@ -77,7 +90,9 @@ class ClassifyStage(Stage):
                 stats.add(record)
                 print(f"  [{count}]", end="\r")
 
-        print(f"\nDone — written to {output_dir}/manifest.jsonl")
+        with open(output_dir / "stats.json", "w", encoding="utf-8") as sf:
+            json.dump(stats.to_dict(), sf, ensure_ascii=False, indent=2)
+        print(f"\nDone — written to {output_dir}/manifest.jsonl and stats.json")
         print(stats.report())
 
     def classify(self, entries, classifier):
