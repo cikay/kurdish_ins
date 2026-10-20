@@ -1,7 +1,8 @@
 # kurdish-ins
 
-Instruction-tuning data for Kurmanji Kurdish, built from the Kurmanji subset of
-[FineWeb2](https://huggingface.co/datasets/HuggingFaceFW/fineweb-2) (`kmr_Latn`).
+Instruction-tuning data for Kurmanji Kurdish, built from the Kurmanji (`kmr_Latn`) subsets
+of [FineWeb2](https://huggingface.co/datasets/HuggingFaceFW/fineweb-2) and
+[kurdish-theses-yok](https://huggingface.co/datasets/muzaffercky/kurdish-theses-yok).
 
 The pipeline is built one stage at a time. So far it has one stage, `classify`.
 
@@ -49,17 +50,17 @@ data/classify/sample/manifest.jsonl
 
 | Stage      | Reads                          | Writes                               |
 |------------|--------------------------------|--------------------------------------|
-| `classify` | FineWeb2, or `input_file`      | `data/classify/<run>/manifest.jsonl` |
+| `classify` | `sources`, or `input_file`     | `data/classify/<run>/manifest.jsonl` |
 
 ### classify
 
-Labels each FineWeb2 entry with its web register using
+Labels each entry of every source with its web register using
 [TurkuNLP/web-register-classification-multilingual](https://huggingface.co/TurkuNLP/web-register-classification-multilingual)
 (for example `IN`/`en` for an encyclopedia article, `NA`/`ne` for news). It drops nothing.
 Choosing which registers become instruction pairs is left to a later stage, so changing
 that rule never means classifying again.
 
-Each manifest row has `id`, `url`, `domain`, `text`, `register_labels` and
+Each manifest row has `source` (the dataset it came from), `id`, `url`, `domain`, `text`, `register_labels` and
 `register_scores` (every label's score, so a later stage can use a different threshold
 without running the model again).
 
@@ -70,9 +71,8 @@ Settings in `config.yml`:
 
 | Setting      | Meaning                                                       |
 |--------------|---------------------------------------------------------------|
-| `dataset`    | Hugging Face dataset id                                       |
-| `subset`     | FineWeb2 subset                                               |
-| `input_file` | JSONL of entries to classify instead, e.g. `data/sample.jsonl`; `null` means the whole subset |
+| `sources`    | the datasets read: each has `dataset` (Hugging Face id), `files` (glob of its parquet files) and `columns` (the dataset's names for `id`, `url` and `text`) |
+| `input_file` | JSONL of entries to classify instead, e.g. `data/sample.jsonl`; `null` means every source |
 | `threshold`  | a register is predicted when its score is above this          |
 | `batch_size` | entries classified at a time, and windows per model call      |
 | `max_length` | tokens per window; 512 is XLM-R's limit                       |
@@ -81,10 +81,11 @@ Settings in `config.yml`:
 Kurmanji is not one of the classifier's training languages. On a small test set it still
 labelled Wikipedia articles `IN`/`en` and news sites `NA`/`ne`.
 
-## How FineWeb2 is read
+## How the datasets are read
 
-`kurdish_ins/fineweb.py` downloads the subset's parquet files into the Hugging Face cache
-and reads them locally. `kmr_Latn` is a single 562 MB file, and it is downloaded once.
+`kurdish_ins/hub.py` downloads a source's parquet files into the Hugging Face cache and
+reads them locally. FineWeb2's `kmr_Latn` is a single 562 MB file, the theses' one 65 MB
+file, and each is downloaded once.
 
 It does not use `load_dataset(..., streaming=True)`, because a stream that is not read to
 the end hangs the process at exit. pyarrow reads the next chunk over HTTP on one of its own
@@ -119,7 +120,7 @@ Options: `--total`, `--per-domain`, `--min-words` and `--output`.
 pipenv run pytest
 ```
 
-The tests never load the classifier model or download FineWeb2. They pass a fake
+The tests never load the classifier model or download a dataset. They pass a fake
 classifier to `ClassifyStage.classify`.
 
 ## Layout
@@ -131,7 +132,7 @@ kurdish_ins/
   stage.py             Stage base class, stage_config, run_name, load_manifest
   classify.py          classify stage
   register_classifier.py  the register model and its labels
-  fineweb.py           reads FineWeb2 from local parquet files
+  hub.py               reads a dataset from local parquet files
   logs.py              logging setup
 scripts/               standalone tools
 tests/

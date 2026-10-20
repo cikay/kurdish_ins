@@ -31,7 +31,7 @@ def stage_config(name: str, config_path: Path = CONFIG_FILE) -> dict:
 def run_name(config_path: Path = CONFIG_FILE) -> str:
     """The folder every stage of this run writes into, under `data/<stage>/`.
 
-    `full` when `classify` reads the whole FineWeb2 subset, otherwise the stem of its
+    `full` when `classify` reads every source, otherwise the stem of its
     `input_file` (`data/sample.jsonl` → `sample`), so a sample run and a full run never
     overwrite each other's manifests.
     """

@@ -1,14 +1,17 @@
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import torch
 import yaml
 
+from kurdish_ins import hub
 from kurdish_ins.classify import ClassifyStage
 from kurdish_ins.register_classifier import average_by_text, labels_from_scores
 from kurdish_ins.stage import run_name
 
 
 def stage(batch_size=2):
-    return ClassifyStage(dataset="d", subset="s", input_file=None, threshold=0.5,
+    return ClassifyStage(sources=[], input_file=None, threshold=0.5,
                          batch_size=batch_size, max_length=512, stride=0)
 
 
@@ -24,7 +27,7 @@ class FakeClassifier:
 
 
 def entry(i):
-    return {"id": f"id{i}", "url": f"http://site{i}.org/page", "text": f"text {i}", "date": "x"}
+    return {"source": "d", "id": f"id{i}", "url": f"http://site{i}.org/page", "text": f"text {i}", "date": "x"}
 
 
 class TestLabelsFromScores:
@@ -52,6 +55,7 @@ class TestClassify:
     def test_record_keeps_text_and_adds_registers(self):
         [record] = stage().classify([entry(1)], FakeClassifier())
         assert record == {
+            "source": "d",
             "id": "id1",
             "url": "http://site1.org/page",
             "domain": "site1.org",
@@ -77,3 +81,13 @@ class TestRunName:
     def test_input_file_called_full_is_refused(self, tmp_path):
         with pytest.raises(ValueError):
             run_name(config(tmp_path, "data/full.jsonl"))
+
+
+class TestHubEntries:
+    def test_columns_are_renamed_and_source_added(self, tmp_path, monkeypatch):
+        (tmp_path / "kmr_Latn").mkdir()
+        table = pa.table({"tez_id": ["7"], "url": ["http://u"], "text": ["t"], "title": ["x"]})
+        pq.write_table(table, tmp_path / "kmr_Latn" / "train-0.parquet")
+        monkeypatch.setattr(hub, "snapshot_download", lambda *args, **kwargs: str(tmp_path))
+        rows = list(hub.entries("d", "kmr_Latn/train-*.parquet", {"id": "tez_id", "url": "url", "text": "text"}))
+        assert rows == [{"source": "d", "id": "7", "url": "http://u", "text": "t"}]

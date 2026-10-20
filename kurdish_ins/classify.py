@@ -1,4 +1,4 @@
-"""Stage — Read FineWeb2 Kurmanji and label each entry's web register.
+"""Stage — Read the Kurmanji datasets and label each entry's web register.
 
 This stage only labels; it drops nothing. Deciding which registers become instruction
 pairs is a later stage's job, so changing that rule never means classifying again.
@@ -6,11 +6,11 @@ pairs is a later stage's job, so changing that rule never means classifying agai
 
 import json
 from collections import Counter
-from itertools import islice
+from itertools import chain, islice
 from pathlib import Path
 from urllib.parse import urlparse
 
-from kurdish_ins import fineweb
+from kurdish_ins import hub
 from kurdish_ins.register_classifier import RegisterClassifier
 from kurdish_ins.stage import Stage, load_manifest, run_name, stage_config
 
@@ -18,10 +18,9 @@ from kurdish_ins.stage import Stage, load_manifest, run_name, stage_config
 class ClassifyStage(Stage):
     name = "classify"
 
-    def __init__(self, dataset: str, subset: str, input_file: str | None, threshold: float,
+    def __init__(self, sources: list[dict], input_file: str | None, threshold: float,
                  batch_size: int, max_length: int, stride: int):
-        self._dataset = dataset
-        self._subset = subset
+        self._sources = sources
         self._input_file = input_file
         self._threshold = threshold
         self._batch_size = batch_size
@@ -29,7 +28,7 @@ class ClassifyStage(Stage):
         self._stride = stride
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
-        source = self._input_file or f"{self._dataset}/{self._subset}"
+        source = self._input_file or ", ".join(source["dataset"] for source in self._sources)
         print(f"Classifying the entries of {source} "
               f"(threshold={self._threshold}, batch_size={self._batch_size})")
         classifier = RegisterClassifier(self._threshold, self._max_length, self._stride, self._batch_size)
@@ -58,6 +57,8 @@ class ClassifyStage(Stage):
             results = classifier.classify([entry["text"] for entry in batch])
             for entry, (labels, scores) in zip(batch, results):
                 yield {
+                    # None for an input_file written before entries had a source
+                    "source": entry.get("source"),
                     "id": entry["id"],
                     "url": entry["url"],
                     "domain": urlparse(entry["url"]).netloc,
@@ -69,7 +70,8 @@ class ClassifyStage(Stage):
     def _entries(self):
         if self._input_file:
             return load_manifest(Path(self._input_file))
-        return fineweb.entries(self._dataset, self._subset)
+        return chain.from_iterable(
+            hub.entries(source["dataset"], source["files"], source["columns"]) for source in self._sources)
 
 
 if __name__ == "__main__":

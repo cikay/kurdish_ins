@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Save a sample of FineWeb2 Kurmanji entries, spread over many domains.
 
-Reads FineWeb2 kmr_Latn (see kurdish_ins/fineweb.py) and keeps entries longer than --min-words words, at most
+Reads FineWeb2 kmr_Latn (see kurdish_ins/hub.py) and keeps entries longer than --min-words words, at most
 --per-domain entries per domain, until --total entries are saved.
 
 Usage:
@@ -15,10 +15,11 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
 
-from kurdish_ins import fineweb
+from kurdish_ins import hub
 
 DATASET = "HuggingFaceFW/fineweb-2"
-SUBSET = "kmr_Latn"
+FILES = "data/kmr_Latn/train/*.parquet"
+COLUMNS = {"id": "id", "url": "url", "text": "text"}
 
 
 def parse_args():
@@ -36,7 +37,7 @@ def main():
     records = []
     per_domain = Counter()
     scanned = 0
-    for entry in fineweb.entries(DATASET, SUBSET):
+    for entry in hub.entries(DATASET, FILES, COLUMNS):
         if len(records) >= args.total:
             break
         scanned += 1
@@ -44,7 +45,7 @@ def main():
         if len(entry["text"].split()) < args.min_words or per_domain[domain] >= args.per_domain:
             continue
         per_domain[domain] += 1
-        records.append({"id": entry["id"], "url": entry["url"], "domain": domain, "text": entry["text"]})
+        records.append({"source": entry["source"], "id": entry["id"], "url": entry["url"], "domain": domain, "text": entry["text"]})
         print(f"  [{len(records)}/{args.total}] scanned {scanned}", end="\r")
 
     output = Path(args.output)
