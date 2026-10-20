@@ -21,24 +21,27 @@ class ClassifyStats:
     """What the stage did, totalled per source.
 
     Printed and saved to `stats.json` when the run ends, so changing `threshold` or
-    `max_length` in `config.yml` and running again shows what moved.
+    `max_length` in `config.yml` and running again shows what moved. A label set is an
+    entry's labels together, e.g. `IN en`; `(none)` is the set of an entry with no label.
     """
 
     entries: Counter = field(default_factory=Counter)
     words: Counter = field(default_factory=Counter)
     unlabelled: Counter = field(default_factory=Counter)
     labels: defaultdict = field(default_factory=lambda: defaultdict(Counter))
+    label_sets: defaultdict = field(default_factory=lambda: defaultdict(Counter))
 
     def add(self, record: dict) -> None:
         source = record["source"] or "(no source)"
         self.entries[source] += 1
         self.words[source] += len(record["text"].split())
         self.labels[source].update(record["register_labels"])
+        self.label_sets[source][" ".join(record["register_labels"]) or "(none)"] += 1
         if not record["register_labels"]:
             self.unlabelled[source] += 1
 
     def to_dict(self) -> dict:
-        """The stats as {source: {entries, words, no_label, main_registers, sub_registers}}."""
+        """The stats as {source: {entries, words, no_label, main_registers, sub_registers, label_sets}}."""
         return {
             source: {
                 "entries": entries,
@@ -46,6 +49,7 @@ class ClassifyStats:
                 "no_label": self.unlabelled[source],
                 "main_registers": {label: n for label, n in self.labels[source].most_common() if label.isupper()},
                 "sub_registers": {label: n for label, n in self.labels[source].most_common() if label.islower()},
+                "label_sets": dict(self.label_sets[source].most_common()),
             }
             for source, entries in self.entries.items()
         }
@@ -60,6 +64,9 @@ class ClassifyStats:
             for title, wanted in (("main registers", str.isupper), ("sub-registers", str.islower)):
                 counts = ", ".join(f"{label} {n:,} ({n / entries:.0%})" for label, n in labels if wanted(label))
                 lines.append(f"  {title:<15} {counts or '-'}")
+            label_sets = ", ".join(f"{labels} {n:,} ({n / entries:.0%})"
+                                   for labels, n in self.label_sets[source].most_common())
+            lines.append(f"  {'label sets':<15} {label_sets}")
         return "\n".join(lines)
 
 
