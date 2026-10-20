@@ -12,7 +12,7 @@ from kurdish_ins.stage import run_name
 
 def stage(batch_size=2):
     return ClassifyStage(sources=[], input_file=None, threshold=0.5,
-                         batch_size=batch_size, max_length=512, stride=0)
+                         batch_size=batch_size, max_length=512, stride=0, dtype="float32")
 
 
 class FakeClassifier:

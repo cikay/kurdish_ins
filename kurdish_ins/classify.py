@@ -74,19 +74,21 @@ class ClassifyStage(Stage):
     name = "classify"
 
     def __init__(self, sources: list[dict], threshold: float, batch_size: int,
-                 max_length: int, stride: int, input_file: str | None = None):
+                 max_length: int, stride: int, dtype: str, input_file: str | None = None):
         self._sources = sources
         self._input_file = input_file
         self._threshold = threshold
         self._batch_size = batch_size
         self._max_length = max_length
         self._stride = stride
+        self._dtype = dtype
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
         source = self._input_file or ", ".join(source["dataset"] for source in self._sources)
         print(f"Classifying the entries of {source} "
-              f"(threshold={self._threshold}, batch_size={self._batch_size})")
-        classifier = RegisterClassifier(self._threshold, self._max_length, self._stride, self._batch_size)
+              f"(threshold={self._threshold}, batch_size={self._batch_size}, dtype={self._dtype})")
+        classifier = RegisterClassifier(self._threshold, self._max_length, self._stride,
+                                        self._batch_size, self._dtype)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         stats = ClassifyStats()

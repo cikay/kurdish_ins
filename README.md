@@ -52,10 +52,11 @@ modal volume get kurdish-ins /classify/<run> data/modal/   # <run> is full, or e
 
 It reads `classify.input_file` like a local run. Commented out or `null`, it classifies
 every source into `/classify/full`; a file such as `data/s5.jsonl` is uploaded to the
-volume for you and classified into `/classify/s5`. The other settings come from `config.yml` as usual. The
-GPU, the timeout and the GPU's batch size come from its `modal` block. The volume
-`kurdish-ins` holds `data/` and the Hugging Face cache, so the model and the datasets are
-downloaded only on the first run. Running on Modal bills your Modal account.
+volume for you and classified into `/classify/s5`. The other settings come from
+`config.yml` as usual. The GPU, the timeout, and the GPU's batch size and dtype come from
+its `modal` block; Modal runs the model in `bfloat16`. The volume `kurdish-ins` holds
+`data/` and the Hugging Face cache, so the model and the datasets are downloaded only on
+the first run. Running on Modal bills your Modal account.
 
 ## Pipeline stages
 
@@ -105,6 +106,7 @@ Settings in `config.yml`:
 | `batch_size` | entries classified at a time, and windows per model call      |
 | `max_length` | tokens per window; 512 is XLM-R's limit                       |
 | `stride`     | tokens neighbouring windows share; 0 means no overlap         |
+| `dtype`      | precision the model runs in: `float32`, or `bfloat16` (several times faster on a GPU; scores move in the 2nd–3rd decimal) |
 
 Kurmanji is not one of the classifier's training languages. On a small test set it still
 labelled Wikipedia articles `IN`/`en` and news sites `NA`/`ne`.

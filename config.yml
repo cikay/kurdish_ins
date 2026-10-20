@@ -32,14 +32,17 @@ classify:
   # Tokens neighbouring windows share, so a sentence cut at a window's end is read whole
   # in the next one too. 0 means windows do not overlap and every token counts once.
   stride: 0
+  # The precision the model runs in: float32, or bfloat16 (16-bit numbers with 2–3
+  # significant digits). bfloat16 is several times faster on a GPU but rounds every step,
+  # so scores move in the 2nd–3rd decimal and a score near the threshold can cross it.
+  dtype: float32
 
 # Where each stage runs on Modal (modal_app/app.py). pipeline.py does not read this.
 modal:
   classify:
-    # An A100 should read all the sources (about 1,000,000 windows: 935,000 from FineWeb2,
-    # 65,000 from the 408 theses) in about 2.5 hours in float32 — an estimate from the
-    # model's arithmetic, not a measurement. A10G is cheaper per hour and about 7 hours;
-    # H100 is about 1.5.
+    # In float32 an A100 read about 48 windows/s (measured), so all the sources (about
+    # 1,000,000 windows: 935,000 from FineWeb2, 65,000 from the 408 theses) take about
+    # 5.5 hours. bfloat16 uses its 16-bit matrix units and should be several times faster.
     gpu: A100
     # Modal ends the call after this long. Its limit is 24 hours.
     timeout_minutes: 720
@@ -48,3 +51,5 @@ modal:
     # padding in a batch is masked out, so a window scores the same in any batch, up to
     # float rounding in the last digits.
     batch_size: 64
+    # In place of classify.dtype. The A100 is fastest in bfloat16.
+    dtype: bfloat16

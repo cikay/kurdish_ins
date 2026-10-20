@@ -13,8 +13,8 @@ volume and classified into `data/classify/s5/`. The volume is mounted at `/root/
 the code runs in `/root`, so `data/s5.jsonl` means the same file here as on the Mac.
 
 The other knobs are `config.yml`'s `classify` block, copied into the image, so a run here
-and a local run cannot tune differently. Where it runs — GPU, timeout and the GPU's batch
-size — is the `modal` block of the same file.
+and a local run cannot tune differently. Where it runs — GPU, timeout, and the GPU's batch
+size and dtype — is the `modal` block of the same file.
 """
 
 from pathlib import Path
@@ -62,11 +62,11 @@ def modal_settings(stage: str) -> dict:
 # GPU and timeout are not set here: they come from the `modal` block of config.yml and are
 # applied per call with `with_options` in the entry point below
 @app.function(image=image, volumes={VOLUME_MOUNT_PATH: volume})
-def classify_stage(batch_size: int) -> None:
+def classify_stage(batch_size: int, dtype: str) -> None:
     from kurdish_ins.classify import ClassifyStage
     from kurdish_ins.stage import run_name, stage_config
 
-    stage = ClassifyStage(**{**stage_config("classify"), "batch_size": batch_size})
+    stage = ClassifyStage(**{**stage_config("classify"), "batch_size": batch_size, "dtype": dtype})
     stage.run(None, Path("data") / "classify" / run_name())
     volume.commit()
 
@@ -82,4 +82,4 @@ def classify():
     classify_stage.with_options(
         gpu=settings["gpu"],
         timeout=settings["timeout_minutes"] * 60,
-    ).remote(settings["batch_size"])
+    ).remote(settings["batch_size"], settings["dtype"])

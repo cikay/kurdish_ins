@@ -32,16 +32,16 @@ def average_by_text(probs, text_index_of_window, n_texts):
 
 
 class RegisterClassifier:
-    def __init__(self, threshold=0.5, max_length=512, stride=0, batch_size=8):
+    def __init__(self, threshold=0.5, max_length=512, stride=0, batch_size=8, dtype="float32"):
         self.threshold = threshold
         self.max_length = max_length
         self.stride = stride
         self.batch_size = batch_size
         self.device = pick_device()
-        print(f"Loading {MODEL_ID} on {self.device} ...")
+        print(f"Loading {MODEL_ID} on {self.device} in {dtype} ...")
         self.tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_ID, dtype=torch.float32).to(self.device).eval()
+            MODEL_ID, dtype=getattr(torch, dtype)).to(self.device).eval()
         self.id2label = self.model.config.id2label
 
     def classify(self, texts):
@@ -64,7 +64,8 @@ class RegisterClassifier:
                 {key: values[start:start + self.batch_size] for key, values in windows.items()},
                 return_tensors="pt").to(self.device)
             with torch.no_grad():
-                batch_probs.append(torch.sigmoid(self.model(**batch).logits).cpu())
+                # float() so the sigmoid and the average are in float32 whatever the model's dtype
+                batch_probs.append(torch.sigmoid(self.model(**batch).logits.float()).cpu())
 
         averages = average_by_text(torch.cat(batch_probs), text_index_of_window, len(texts))
 
