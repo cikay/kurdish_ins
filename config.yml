@@ -2,12 +2,20 @@ stages:
   - classify
 
 classify:
-  description: Label each FineWeb2 Kurmanji entry's web register, write manifest.jsonl
-  dataset: HuggingFaceFW/fineweb-2
-  subset: kmr_Latn
-  # A JSONL file of entries to classify instead of the whole subset, e.g. the output of
+  description: Label each Kurmanji entry's web register, write manifest.jsonl
+  # The datasets read, one after the other, into one manifest. `files` is the glob of the
+  # kmr_Latn parquet files inside the dataset repository; `columns` maps id, url and text
+  # to the dataset's own column names. Each manifest row's `source` is its dataset.
+  sources:
+    - dataset: HuggingFaceFW/fineweb-2
+      files: data/kmr_Latn/train/*.parquet
+      columns: {id: id, url: url, text: text}
+    - dataset: muzaffercky/kurdish-theses-yok
+      files: kmr_Latn/train-*.parquet
+      columns: {id: tez_id, url: url, text: text}
+  # A JSONL file of entries to classify instead of the sources, e.g. the output of
   # `python -m scripts.sample_fineweb`. Each line needs `id`, `url` and `text`.
-  # `null` means every entry of `dataset`/`subset`.
+  # Comment it out (or set it to `null`) to classify every entry of every source.
   input_file: data/sample.jsonl
   # TurkuNLP/web-register-classification-multilingual is multi-label: a register is
   # predicted when its sigmoid score is above this. Every score is written to the
@@ -24,3 +32,24 @@ classify:
   # Tokens neighbouring windows share, so a sentence cut at a window's end is read whole
   # in the next one too. 0 means windows do not overlap and every token counts once.
   stride: 0
+  # The precision the model runs in: float32, or bfloat16 (16-bit numbers with 2–3
+  # significant digits). bfloat16 is several times faster on a GPU but rounds every step,
+  # so scores move in the 2nd–3rd decimal and a score near the threshold can cross it.
+  dtype: float32
+
+# Where each stage runs on Modal (modal_app/app.py). pipeline.py does not read this.
+modal:
+  classify:
+    # In float32 an A100 read about 48 windows/s (measured), so all the sources (about
+    # 1,000,000 windows: 935,000 from FineWeb2, 65,000 from the 408 theses) take about
+    # 5.5 hours. bfloat16 uses its 16-bit matrix units and should be several times faster.
+    gpu: A100
+    # Modal ends the call after this long. Its limit is 24 hours.
+    timeout_minutes: 720
+    # Windows per model call on the GPU, in place of classify.batch_size, which is sized for
+    # the Mac and leaves a big GPU mostly idle. It does not change what is written: the
+    # padding in a batch is masked out, so a window scores the same in any batch, up to
+    # float rounding in the last digits.
+    batch_size: 64
+    # In place of classify.dtype. The A100 is fastest in bfloat16.
+    dtype: bfloat16

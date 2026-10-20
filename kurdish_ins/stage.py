@@ -20,8 +20,9 @@ def stage_config(name: str, config_path: Path = CONFIG_FILE) -> dict:
     """The tuning knobs `config.yml` gives one stage, ready to pass as keyword arguments.
 
     Every knob lives there and nowhere else — no stage defines a default in Python, so
-    running a stage on its own and running it through `pipeline.py` cannot disagree.
-    `description` is documentation, not a knob, so it is dropped.
+    running a stage on its own and running it through `pipeline.py` cannot disagree. The
+    one exception is `classify.input_file`, which may be left out (commented out) to mean
+    `null`. `description` is documentation, not a knob, so it is dropped.
     """
     with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -31,11 +32,11 @@ def stage_config(name: str, config_path: Path = CONFIG_FILE) -> dict:
 def run_name(config_path: Path = CONFIG_FILE) -> str:
     """The folder every stage of this run writes into, under `data/<stage>/`.
 
-    `full` when `classify` reads the whole FineWeb2 subset, otherwise the stem of its
+    `full` when `classify` reads every source, otherwise the stem of its
     `input_file` (`data/sample.jsonl` → `sample`), so a sample run and a full run never
     overwrite each other's manifests.
     """
-    input_file = stage_config("classify", config_path)["input_file"]
+    input_file = stage_config("classify", config_path).get("input_file")
     if not input_file:
         return "full"
     name = Path(input_file).stem
