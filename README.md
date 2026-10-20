@@ -63,6 +63,9 @@ Each manifest row has `id`, `url`, `domain`, `text`, `register_labels` and
 `register_scores` (every label's score, so a later stage can use a different threshold
 without running the model again).
 
+A label is written only when its own score is above `threshold`. A sub-register does not
+add its main register: `en` alone means `IN` scored below the threshold.
+
 Settings in `config.yml`:
 
 | Setting      | Meaning                                                       |

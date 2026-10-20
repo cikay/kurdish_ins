@@ -6,16 +6,6 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 MODEL_ID = "TurkuNLP/web-register-classification-multilingual"
 TOKENIZER_ID = "xlm-roberta-large"
 
-# Sub-register -> main register (a predicted sub-register implies its parent)
-PARENT = {
-    "it": "SP",
-    "ne": "NA", "sr": "NA", "nb": "NA",
-    "re": "HI",
-    "en": "IN", "ra": "IN", "dtp": "IN", "fi": "IN", "lt": "IN",
-    "rv": "OP", "ob": "OP", "rs": "OP", "av": "OP",
-    "ds": "IP", "ed": "IP",
-}
-
 
 def pick_device():
     if torch.cuda.is_available():
@@ -26,10 +16,8 @@ def pick_device():
 
 
 def labels_from_scores(scores, threshold):
-    """Sorted labels scoring above the threshold, plus the parent of every sub-register."""
-    labels = {label for label, p in scores.items() if p > threshold}
-    labels |= {PARENT[label] for label in labels if label in PARENT}
-    return sorted(labels)
+    """Sorted labels scoring above the threshold."""
+    return sorted(label for label, p in scores.items() if p > threshold)
 
 
 def average_by_text(probs, text_index_of_window, n_texts):

@@ -28,8 +28,8 @@ def entry(i):
 
 
 class TestLabelsFromScores:
-    def test_sub_register_brings_its_parent(self):
-        assert labels_from_scores({"en": 0.9, "IN": 0.2}, 0.5) == ["IN", "en"]
+    def test_only_labels_above_threshold(self):
+        assert labels_from_scores({"en": 0.9, "IN": 0.2}, 0.5) == ["en"]
 
     def test_nothing_above_threshold_is_no_label(self):
         assert labels_from_scores({"IN": 0.5, "NA": 0.1}, 0.5) == []
