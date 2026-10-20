@@ -107,6 +107,11 @@ class TestRunName:
     def test_no_input_file_is_the_full_run(self, tmp_path):
         assert run_name(config(tmp_path, None)) == "full"
 
+    def test_input_file_left_out_is_the_full_run(self, tmp_path):
+        path = tmp_path / "config.yml"
+        path.write_text(yaml.safe_dump({"classify": {"description": "x"}}))
+        assert run_name(path) == "full"
+
     def test_input_file_names_the_run(self, tmp_path):
         assert run_name(config(tmp_path, "data/sample.jsonl")) == "sample"
 

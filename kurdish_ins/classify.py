@@ -73,8 +73,8 @@ class ClassifyStats:
 class ClassifyStage(Stage):
     name = "classify"
 
-    def __init__(self, sources: list[dict], input_file: str | None, threshold: float,
-                 batch_size: int, max_length: int, stride: int):
+    def __init__(self, sources: list[dict], threshold: float, batch_size: int,
+                 max_length: int, stride: int, input_file: str | None = None):
         self._sources = sources
         self._input_file = input_file
         self._threshold = threshold

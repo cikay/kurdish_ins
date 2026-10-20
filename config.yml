@@ -15,7 +15,7 @@ classify:
       columns: {id: tez_id, url: url, text: text}
   # A JSONL file of entries to classify instead of the sources, e.g. the output of
   # `python -m scripts.sample_fineweb`. Each line needs `id`, `url` and `text`.
-  # `null` means every entry of every source.
+  # Comment it out (or set it to `null`) to classify every entry of every source.
   input_file: data/sample.jsonl
   # TurkuNLP/web-register-classification-multilingual is multi-label: a register is
   # predicted when its sigmoid score is above this. Every score is written to the

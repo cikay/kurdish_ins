@@ -7,10 +7,10 @@ Run it from the repository root, as a module, so `kurdish_ins` imports as it doe
     modal run --detach -m modal_app.app::classify
     modal volume get kurdish-ins /classify/<run> data/modal/
 
-It reads `classify.input_file` like a local run: `null` classifies every source into
-`data/classify/full/`, and a file such as `data/s5.jsonl` is uploaded to the volume and
-classified into `data/classify/s5/`. The volume is mounted at `/root/data` and the code runs
-in `/root`, so `data/s5.jsonl` means the same file here as on the Mac.
+It reads `classify.input_file` like a local run. Commented out or `null`, it classifies
+every source into `data/classify/full/`; a file such as `data/s5.jsonl` is uploaded to the
+volume and classified into `data/classify/s5/`. The volume is mounted at `/root/data` and
+the code runs in `/root`, so `data/s5.jsonl` means the same file here as on the Mac.
 
 The other knobs are `config.yml`'s `classify` block, copied into the image, so a run here
 and a local run cannot tune differently. Where it runs — GPU, timeout and the GPU's batch

@@ -50,9 +50,9 @@ modal run --detach -m modal_app.app::classify
 modal volume get kurdish-ins /classify/<run> data/modal/   # <run> is full, or e.g. s5
 ```
 
-It reads `classify.input_file` like a local run: `null` classifies every source into
-`/classify/full`, and a file such as `data/s5.jsonl` is uploaded to the volume for you and
-classified into `/classify/s5`. The other settings come from `config.yml` as usual. The
+It reads `classify.input_file` like a local run. Commented out or `null`, it classifies
+every source into `/classify/full`; a file such as `data/s5.jsonl` is uploaded to the
+volume for you and classified into `/classify/s5`. The other settings come from `config.yml` as usual. The
 GPU, the timeout and the GPU's batch size come from its `modal` block. The volume
 `kurdish-ins` holds `data/` and the Hugging Face cache, so the model and the datasets are
 downloaded only on the first run. Running on Modal bills your Modal account.
@@ -62,8 +62,8 @@ downloaded only on the first run. Running on Modal bills your Modal account.
 Each stage writes `data/<stage>/<run>/manifest.jsonl`. The next stage reads the same run's
 file. `data/` is gitignored.
 
-The run is `full` when `classify.input_file` is `null`, and otherwise the input file's name
-without its extension (`data/sample.jsonl` → `sample`). A sample run and a full run
+The run is `full` when `classify.input_file` is commented out or `null`, and otherwise
+the input file's name without its extension (`data/sample.jsonl` → `sample`). A sample run and a full run
 therefore never overwrite each other:
 
 ```
@@ -100,7 +100,7 @@ Settings in `config.yml`:
 | Setting      | Meaning                                                       |
 |--------------|---------------------------------------------------------------|
 | `sources`    | the datasets read: each has `dataset` (Hugging Face id), `files` (glob of its parquet files) and `columns` (the dataset's names for `id`, `url` and `text`) |
-| `input_file` | JSONL of entries to classify instead, e.g. `data/sample.jsonl`; `null` means every source |
+| `input_file` | JSONL of entries to classify instead, e.g. `data/sample.jsonl`; commented out or `null` means every source |
 | `threshold`  | a register is predicted when its score is above this          |
 | `batch_size` | entries classified at a time, and windows per model call      |
 | `max_length` | tokens per window; 512 is XLM-R's limit                       |
