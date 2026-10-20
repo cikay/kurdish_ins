@@ -67,6 +67,9 @@ without running the model again).
 A label is written only when its own score is above `threshold`. A sub-register does not
 add its main register: `en` alone means `IN` scored below the threshold.
 
+When the run ends, the stage prints its stats for each source: entries, words, entries
+with no label, and how many entries got each main register and sub-register.
+
 Settings in `config.yml`:
 
 | Setting      | Meaning                                                       |

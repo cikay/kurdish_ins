@@ -5,7 +5,7 @@ import torch
 import yaml
 
 from kurdish_ins import hub
-from kurdish_ins.classify import ClassifyStage
+from kurdish_ins.classify import ClassifyStage, ClassifyStats
 from kurdish_ins.register_classifier import average_by_text, labels_from_scores
 from kurdish_ins.stage import run_name
 
@@ -63,6 +63,26 @@ class TestClassify:
             "register_labels": ["IN", "en"],
             "register_scores": {"IN": 0.9, "en": 0.8},
         }
+
+
+class TestClassifyStats:
+    def test_report_counts_per_source(self):
+        stats = ClassifyStats()
+        stats.add({"source": "web", "text": "a b c", "register_labels": ["IN", "en"]})
+        stats.add({"source": "web", "text": "d", "register_labels": []})
+        stats.add({"source": None, "text": "e f", "register_labels": ["NA"]})
+        assert stats.report() == "\n".join([
+            "",
+            "web",
+            "  2 entries, 4 words, 1 with no label",
+            "  main registers  IN 1 (50%)",
+            "  sub-registers   en 1 (50%)",
+            "",
+            "(no source)",
+            "  1 entries, 2 words, 0 with no label",
+            "  main registers  NA 1 (100%)",
+            "  sub-registers   -",
+        ])
 
 
 def config(tmp_path, input_file):

@@ -5,7 +5,8 @@ pairs is a later stage's job, so changing that rule never means classifying agai
 """
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from itertools import chain, islice
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,6 +14,40 @@ from urllib.parse import urlparse
 from kurdish_ins import hub
 from kurdish_ins.register_classifier import RegisterClassifier
 from kurdish_ins.stage import Stage, load_manifest, run_name, stage_config
+
+
+@dataclass
+class ClassifyStats:
+    """What the stage did, totalled per source.
+
+    Printed when the run ends, so changing `threshold` or `max_length` in `config.yml` and
+    running again shows what moved.
+    """
+
+    entries: Counter = field(default_factory=Counter)
+    words: Counter = field(default_factory=Counter)
+    unlabelled: Counter = field(default_factory=Counter)
+    labels: defaultdict = field(default_factory=lambda: defaultdict(Counter))
+
+    def add(self, record: dict) -> None:
+        source = record["source"] or "(no source)"
+        self.entries[source] += 1
+        self.words[source] += len(record["text"].split())
+        self.labels[source].update(record["register_labels"])
+        if not record["register_labels"]:
+            self.unlabelled[source] += 1
+
+    def report(self) -> str:
+        lines = []
+        for source, entries in self.entries.items():
+            lines.append(f"\n{source}")
+            lines.append(f"  {entries:,} entries, {self.words[source]:,} words, "
+                         f"{self.unlabelled[source]:,} with no label")
+            labels = self.labels[source].most_common()
+            for title, wanted in (("main registers", str.isupper), ("sub-registers", str.islower)):
+                counts = ", ".join(f"{label} {n:,} ({n / entries:.0%})" for label, n in labels if wanted(label))
+                lines.append(f"  {title:<15} {counts or '-'}")
+        return "\n".join(lines)
 
 
 class ClassifyStage(Stage):
@@ -34,21 +69,16 @@ class ClassifyStage(Stage):
         classifier = RegisterClassifier(self._threshold, self._max_length, self._stride, self._batch_size)
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        registers = Counter()
-        count = 0
+        stats = ClassifyStats()
 
         with open(output_dir / "manifest.jsonl", "w", encoding="utf-8") as mf:
-            for record in self.classify(self._entries(), classifier):
+            for count, record in enumerate(self.classify(self._entries(), classifier), 1):
                 mf.write(json.dumps(record, ensure_ascii=False) + "\n")
-                registers.update(label for label in record["register_labels"] if label.isupper())
-                if not record["register_labels"]:
-                    registers["(none)"] += 1
-                count += 1
+                stats.add(record)
                 print(f"  [{count}]", end="\r")
 
-        print(f"\nDone — {count} entries classified")
-        print(f"       main registers: {', '.join(f'{n} {r}' for r, n in registers.most_common())}")
-        print(f"       → {output_dir}/manifest.jsonl")
+        print(f"\nDone — written to {output_dir}/manifest.jsonl")
+        print(stats.report())
 
     def classify(self, entries, classifier):
         """Yield one manifest record per entry, classifying `batch_size` entries at a time."""
