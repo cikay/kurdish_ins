@@ -46,15 +46,16 @@ modal setup
 Then, from the repository root:
 
 ```bash
-modal volume put kurdish-ins data/sample.jsonl /sample.jsonl   # only when classify.input_file is set
 modal run --detach -m modal_app.app::classify
-modal volume get kurdish-ins /classify data/
+modal volume get kurdish-ins /classify/<run> data/modal/   # <run> is full, or e.g. s5
 ```
 
-The stage's settings come from `config.yml` as usual. The GPU, the timeout and the GPU's
-batch size come from its `modal` block. The volume `kurdish-ins` holds `data/` and the
-Hugging Face cache, so the model and the datasets are downloaded only on the first run.
-Running on Modal bills your Modal account.
+It reads `classify.input_file` like a local run: `null` classifies every source into
+`/classify/full`, and a file such as `data/s5.jsonl` is uploaded to the volume for you and
+classified into `/classify/s5`. The other settings come from `config.yml` as usual. The
+GPU, the timeout and the GPU's batch size come from its `modal` block. The volume
+`kurdish-ins` holds `data/` and the Hugging Face cache, so the model and the datasets are
+downloaded only on the first run. Running on Modal bills your Modal account.
 
 ## Pipeline stages
 

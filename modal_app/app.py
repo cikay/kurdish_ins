@@ -4,24 +4,25 @@ stage that `pipeline.py` runs locally.
 
 Run it from the repository root, as a module, so `kurdish_ins` imports as it does locally:
 
-    modal volume put kurdish-ins data/sample.jsonl /sample.jsonl   # only when classify.input_file is set
-    modal run -m modal_app.app::classify
     modal run --detach -m modal_app.app::classify
-    modal volume get kurdish-ins /classify data/
+    modal volume get kurdish-ins /classify/<run> data/modal/
 
-The stage's knobs are `config.yml`'s `classify` block, copied into the image, so a run here
+It reads `classify.input_file` like a local run: `null` classifies every source into
+`data/classify/full/`, and a file such as `data/s5.jsonl` is uploaded to the volume and
+classified into `data/classify/s5/`. The volume is mounted at `/root/data` and the code runs
+in `/root`, so `data/s5.jsonl` means the same file here as on the Mac.
+
+The other knobs are `config.yml`'s `classify` block, copied into the image, so a run here
 and a local run cannot tune differently. Where it runs — GPU, timeout and the GPU's batch
 size — is the `modal` block of the same file.
-
-The volume is mounted at `/root/data` and the code runs in `/root`, so `input_file:
-data/sample.jsonl` and the output `data/classify/<run>/manifest.jsonl` mean the same thing
-here as on the Mac.
 """
 
 from pathlib import Path
 
 import modal
 import yaml
+
+from kurdish_ins.stage import stage_config
 
 VOLUME_NAME = "kurdish-ins"
 VOLUME_MOUNT_PATH = "/root/data"
@@ -72,6 +73,11 @@ def classify_stage(batch_size: int) -> None:
 
 @app.local_entrypoint()
 def classify():
+    input_file = stage_config("classify", CONFIG_FILE).get("input_file")
+    if input_file:
+        # data/s5.jsonl on the Mac → /s5.jsonl on the volume → data/s5.jsonl on Modal
+        with volume.batch_upload(force=True) as batch:
+            batch.put_file(REPOSITORY_ROOT / input_file, f"/{Path(input_file).relative_to('data')}")
     settings = modal_settings("classify")
     classify_stage.with_options(
         gpu=settings["gpu"],
