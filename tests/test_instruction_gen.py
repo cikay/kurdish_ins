@@ -3,14 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from kurdish_ins.instruction_gen import (BAD_RESPONSE, KEPT, NO_QUESTION, SPAN_NOT_FOUND, TOO_SHORT,
-                                         InstructionGenStage, check, chunks)
+from types import SimpleNamespace
+
+from kurdish_ins.instruction_gen import (BAD_RESPONSE, FAILED, KEPT, NO_QUESTION, SPAN_NOT_FOUND, TOO_SHORT,
+                                         InstructionGenStage, batch_reply, check, chunks)
 
 
 STAGE_KWARGS = dict(allow_any={"IN": 0.5, "HI": 0.5}, forbid_any={"MT": 0.2, "NA": 0.5},
                     keep_sources=["theses"], mt_exempt_domains=["wiki.org"], min_words=3,
                     chunk_words=1500, model="m", temperature=0.3,
-                    min_answer_words=3, workers=2, retries=1, limit=None, seed=0)
+                    min_answer_words=3, batch=False, workers=2, retries=1, limit=None, seed=0)
 
 
 def stage(**kwargs):
@@ -149,3 +151,101 @@ class TestManifest:
     def test_input_manifest_replaces_it(self, tmp_path):
         manifest = "data/modal/full/manifest.jsonl"
         assert stage(input_manifest=manifest).manifest(tmp_path) == Path(manifest)
+
+
+class TestBatchReply:
+    def test_the_text_parts_are_the_reply(self):
+        line = {"key": "k", "response": {
+            "candidates": [{"content": {"parts": [{"text": "thinking...", "thought": True},
+                                                  {"text": '{"question": "Q?", '}, {"text": '"answer_span": "a"}'}]}}],
+            "usageMetadata": {"promptTokenCount": 10}}}
+        assert batch_reply(line) == ({"question": "Q?", "answer_span": "a"}, {"promptTokenCount": 10})
+
+    def test_an_error_line_failed(self):
+        assert batch_reply({"key": "k", "error": {"code": 500}}) == (FAILED, {})
+
+
+class FakeBatchClient:
+    """A Batch API that answers each request with the first three words of its passage, or
+    with an error for the keys in `errors`."""
+
+    def __init__(self, errors=()):
+        self.errors = set(errors)
+        self.uploaded = []
+        self.created = 0
+        self.files = SimpleNamespace(upload=self.upload, download=self.download)
+        self.batches = SimpleNamespace(create=self.create, get=self.get)
+
+    def upload(self, file, config):
+        self.uploaded.append([json.loads(line) for line in open(file, encoding="utf-8")])
+        return SimpleNamespace(name="files/in")
+
+    def create(self, model, src, config):
+        self.created += 1
+        return SimpleNamespace(name="batches/1")
+
+    def get(self, name):
+        return SimpleNamespace(name=name, state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                               dest=SimpleNamespace(file_name="files/out"), error=None)
+
+    def download(self, file):
+        lines = []
+        for request in self.uploaded[-1]:
+            if request["key"] in self.errors:
+                lines.append({"key": request["key"], "error": {"code": 500}})
+                continue
+            passage = request["request"]["contents"][0]["parts"][0]["text"].split("Passage:\n")[1]
+            reply = {"question": "Q?", "answer_span": " ".join(passage.split()[:3])}
+            lines.append({"key": request["key"], "response": {
+                "candidates": [{"content": {"parts": [{"text": json.dumps(reply)}]}}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "thoughtsTokenCount": 1}}})
+        return "\n".join(json.dumps(line) for line in lines).encode("utf-8")
+
+
+class BatchStage(InstructionGenStage):
+    def __init__(self, client, **kwargs):
+        super().__init__(**{**STAGE_KWARGS, "batch": True, **kwargs})
+        self.client = client
+
+    def _make_client(self):
+        return self.client
+
+
+class TestBatch:
+    def test_writes_pairs_and_forgets_the_job(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
+        client = FakeBatchClient()
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        pairs = [json.loads(l) for l in open(tmp_path / "out" / "manifest.jsonl")]
+        assert sorted(p["id"] for p in pairs) == ["id1", "id2"]
+        assert {p["answer"] for p in pairs} == {"one two three"}
+        assert not (tmp_path / "out" / "batch_job.json").exists()
+        assert not (tmp_path / "out" / "batch_requests.jsonl").exists()
+
+    def test_a_request_is_the_prompt_with_the_generation_config(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1)])
+        client = FakeBatchClient()
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        [[request]] = client.uploaded
+        assert request["key"] == "id1#0"
+        assert request["request"]["generation_config"] == {
+            "response_mime_type": "application/json", "temperature": 0.3}
+
+    def test_a_failed_request_is_sent_again_by_the_next_run(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
+        BatchStage(FakeBatchClient(errors={"id1#0"})).run(tmp_path / "in", tmp_path / "out")
+        assert [json.loads(l)["key"] for l in open(tmp_path / "out" / "responses.jsonl")] == ["id2#0"]
+        client = FakeBatchClient()
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        assert [r["key"] for r in client.uploaded[0]] == ["id1#0"]
+
+    def test_a_job_of_an_earlier_run_is_waited_for_not_submitted_again(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1)])
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out" / "batch_job.json").write_text(json.dumps({"name": "batches/1", "chunks": 1}))
+        client = FakeBatchClient()
+        client.uploaded.append([BatchStage(client).batch_request(
+            {"key": "id1#0", "text": "one two three four five"})])
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        assert client.created == 0
+        assert len(open(tmp_path / "out" / "manifest.jsonl").readlines()) == 1

@@ -10,8 +10,13 @@ The model must answer with one span copied from the chunk (see `prompts.py`). A 
 kept only when the span appears verbatim in the chunk and is long enough, so the answer is
 always the source's own Kurmanji, never the model's.
 
+With `batch` set, the chunks go to Gemini's Batch API as one job, at half the price, and
+the stage waits for it (up to 24 hours). Otherwise it sends them one call at a time.
+
 Each chunk's outcome is appended to `responses.jsonl` as soon as it comes back, so a run
-that stops is resumed by running it again: chunks already answered are skipped.
+that stops is resumed by running it again: chunks already answered are skipped. A batch
+job's name is kept in `batch_job.json` until its results are saved, so a run stopped while
+waiting waits for the same job again rather than paying for a second one.
 """
 
 import json
@@ -33,8 +38,13 @@ BAD_RESPONSE = "bad_response"      # not JSON, or not the shape the prompt asks 
 SPAN_NOT_FOUND = "span_not_found"  # the span is not in the chunk verbatim
 TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words words
 
-# What ask() returns when every retry failed. Not None, which is the model's "no question".
+# What ask() returns when every retry failed, and a batch result line holds an error. Not
+# None, which is the model's "no question".
 FAILED = object()
+
+# A batch job is checked this often while it runs
+BATCH_POLL_SECONDS = 60
+BATCH_DONE_STATES = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"}
 
 
 def chunks(text: str, max_words: int) -> list[str]:
@@ -54,6 +64,30 @@ def chunks(text: str, max_words: int) -> list[str]:
     if lines:
         pieces.append("\n".join(lines).strip())
     return pieces
+
+
+def prompt(text: str) -> str:
+    return f"{SINGLE_SPAN_PROMPT}\n\nPassage:\n{text}"
+
+
+def parse_reply(text: str | None):
+    """The JSON the model wrote, or a dict check() calls a bad response when it is not JSON."""
+    try:
+        return json.loads(text or "null")
+    except json.JSONDecodeError:
+        return {"unparsed": text}
+
+
+def batch_reply(line: dict):
+    """(reply, usage) of one line of a batch job's results. The reply is FAILED when the
+    line holds an error; `usage` is the response's usageMetadata."""
+    response = line.get("response")
+    if not response:
+        return FAILED, {}
+    candidates = response.get("candidates") or [{}]
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+    return parse_reply(text), response.get("usageMetadata") or {}
 
 
 def check(reply, text: str, min_answer_words: int):
@@ -80,7 +114,7 @@ class InstructionGenStage(Stage):
     def __init__(self, allow_any: dict[str, float], forbid_any: dict[str, float], keep_sources: list[str],
                  mt_exempt_domains: list[str],
                  min_words: int, chunk_words: int, model: str, temperature: float,
-                 min_answer_words: int, workers: int, retries: int, limit: int | None, seed: int,
+                 min_answer_words: int, batch: bool, workers: int, retries: int, limit: int | None, seed: int,
                  input_manifest: str | None = None):
         self._allow_any = allow_any
         self._forbid_any = forbid_any
@@ -91,6 +125,7 @@ class InstructionGenStage(Stage):
         self._model = model
         self._temperature = temperature
         self._min_answer_words = min_answer_words
+        self._batch = batch
         self._workers = workers
         self._retries = retries
         self._limit = limit
@@ -114,7 +149,10 @@ class InstructionGenStage(Stage):
               f"(model={self._model})")
         todo = [chunk for chunk in todo if chunk["key"] not in answered]
 
-        if todo:
+        if self._batch and (todo or (output_dir / "batch_job.json").exists()):
+            self._client = self._make_client()
+            self._generate_batch(todo, output_dir)
+        elif todo:
             self._client = self._make_client()
             self._generate_all(todo, responses_path, output_dir / "manifest.jsonl")
 
@@ -198,24 +236,118 @@ class InstructionGenStage(Stage):
             try:
                 for count, future in enumerate(as_completed(futures), 1):
                     chunk, reply = futures[future], future.result()
-                    if reply is FAILED:  # a later run asks again
-                        outcomes["api_error"] += 1
-                        continue
-                    outcome, pair = check(reply, chunk["text"], self._min_answer_words)
-                    outcomes[outcome] += 1
-                    rf.write(json.dumps({"key": chunk["key"], "outcome": outcome,
-                                         "register_labels": chunk["register_labels"], "reply": reply},
-                                        ensure_ascii=False) + "\n")
-                    rf.flush()
-                    if pair:
-                        mf.write(json.dumps(self.record(chunk, *pair), ensure_ascii=False) + "\n")
-                        mf.flush()
+                    outcomes[self.save(chunk, reply, rf, mf)] += 1
                     print(f"  [{count:,}/{len(todo):,}] " + ", ".join(f"{k} {n:,}" for k, n in outcomes.items()),
                           end="\r")
             except BaseException:
                 # Do not wait for the queued chunks: a fatal API error or Ctrl-C ends the run now
                 pool.shutdown(cancel_futures=True)
                 raise
+
+    def _generate_batch(self, todo: list[dict], output_dir: Path) -> None:
+        """Send the chunks as one Batch API job, wait for it and save its results.
+
+        A job submitted by an earlier run, named in `batch_job.json`, is waited for instead
+        of submitting a new one. Its results are matched to the chunks by key; chunks it
+        failed, or did not include, are sent by the next run.
+        """
+        job_path = output_dir / "batch_job.json"
+        requests_path = output_dir / "batch_requests.jsonl"
+        if job_path.exists():
+            name = json.loads(job_path.read_text(encoding="utf-8"))["name"]
+            print(f"Waiting for {name}, submitted by an earlier run")
+        else:
+            name = self._submit(todo, requests_path, display_name=f"instruction-gen-{output_dir.name}")
+            job_path.write_text(json.dumps({"name": name, "chunks": len(todo)}), encoding="utf-8")
+            print(f"Submitted {name} with {len(todo):,} chunks. If this run is stopped, running it "
+                  f"again waits for the same job.")
+
+        job = self._wait(name)
+        if job.state.name != "JOB_STATE_SUCCEEDED":
+            job_path.unlink()
+            sys.exit(f"{name} ended {job.state.name} ({job.error}). Run again to submit the chunks again.")
+
+        self._save_results(job, todo, output_dir)
+        # Only now: a run stopped while saving downloads the same results again
+        job_path.unlink()
+        requests_path.unlink(missing_ok=True)
+
+    def _submit(self, todo: list[dict], requests_path: Path, display_name: str) -> str:
+        """Write the chunks' requests to `requests_path`, upload it and create a batch job
+        from it. Returns the job's name."""
+        with open(requests_path, "w", encoding="utf-8") as f:
+            for chunk in todo:
+                f.write(json.dumps(self.batch_request(chunk), ensure_ascii=False) + "\n")
+        uploaded = self._client.files.upload(file=str(requests_path),
+                                             config={"display_name": display_name, "mime_type": "jsonl"})
+        job = self._client.batches.create(model=self._model, src=uploaded.name,
+                                          config={"display_name": display_name})
+        return job.name
+
+    def _save_results(self, job, todo: list[dict], output_dir: Path) -> None:
+        """Download a finished job's results and save each chunk's reply, as single calls do,
+        then print the outcomes and the tokens the job used."""
+        results = self._client.files.download(file=job.dest.file_name).decode("utf-8")
+        by_key = {chunk["key"]: chunk for chunk in todo}
+        outcomes, tokens = Counter(), Counter()
+        with (open(output_dir / "responses.jsonl", "a", encoding="utf-8") as rf,
+              open(output_dir / "manifest.jsonl", "a", encoding="utf-8") as mf):
+            for line in results.splitlines():
+                if not line.strip():
+                    continue
+                result = json.loads(line)
+                chunk = by_key.get(result.get("key"))
+                if chunk is None:  # saved by an earlier run that stopped while saving
+                    outcomes["already_saved"] += 1
+                    continue
+                reply, usage = batch_reply(result)
+                tokens.update({"input": usage.get("promptTokenCount", 0),
+                               "output": usage.get("candidatesTokenCount", 0),
+                               "thinking": usage.get("thoughtsTokenCount", 0)})
+                outcomes[self.save(chunk, reply, rf, mf)] += 1
+        print(f"  {job.name}: " + ", ".join(f"{k} {n:,}" for k, n in outcomes.items()))
+        print(f"  tokens: input {tokens['input']:,}, output {tokens['output']:,}, thinking {tokens['thinking']:,}")
+
+    def _wait(self, name: str):
+        """The batch job once it has ended, checking it every BATCH_POLL_SECONDS."""
+        started = time.monotonic()
+        while True:
+            job = self._client.batches.get(name=name)
+            if job.state.name in BATCH_DONE_STATES:
+                print()
+                return job
+            minutes = (time.monotonic() - started) / 60
+            print(f"  {job.state.name} ({minutes:.0f} min)", end="\r", flush=True)
+            time.sleep(BATCH_POLL_SECONDS)
+
+    def batch_request(self, chunk: dict) -> dict:
+        """One line of a Batch API input file: the same request ask() sends for the chunk."""
+        return {
+            "key": chunk["key"],
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": prompt(chunk["text"])}]}],
+                "generation_config": {
+                    "response_mime_type": "application/json",
+                    "temperature": self._temperature,
+                },
+            },
+        }
+
+    def save(self, chunk: dict, reply, rf, mf) -> str:
+        """Check the model's reply for a chunk and append it to `responses.jsonl`, and the pair
+        to `manifest.jsonl` when it is kept. Returns the outcome. A FAILED reply is not
+        written, so a later run asks again."""
+        if reply is FAILED:
+            return "api_error"
+        outcome, pair = check(reply, chunk["text"], self._min_answer_words)
+        rf.write(json.dumps({"key": chunk["key"], "outcome": outcome,
+                             "register_labels": chunk["register_labels"], "reply": reply},
+                            ensure_ascii=False) + "\n")
+        rf.flush()
+        if pair:
+            mf.write(json.dumps(self.record(chunk, *pair), ensure_ascii=False) + "\n")
+            mf.flush()
+        return outcome
 
     def record(self, chunk: dict, question: str, answer: str, start: int) -> dict:
         return {
@@ -241,9 +373,11 @@ class InstructionGenStage(Stage):
             try:
                 response = self._client.models.generate_content(
                     model=self._model,
-                    contents=f"{SINGLE_SPAN_PROMPT}\n\nPassage:\n{text}",
-                    config=types.GenerateContentConfig(response_mime_type="application/json",
-                                                       temperature=self._temperature),
+                    contents=prompt(text),
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=self._temperature,
+                    ),
                 )
             except errors.ClientError as e:
                 # 4xx errors (bad model, bad key, ...) won't fix themselves; only retry rate limits
@@ -253,10 +387,7 @@ class InstructionGenStage(Stage):
             except Exception as e:
                 error = str(e)
             else:
-                try:
-                    return json.loads(response.text or "null")
-                except json.JSONDecodeError:
-                    return {"unparsed": response.text}  # check() calls it a bad response
+                return parse_reply(response.text)
             wait = 2 ** attempt * 5
             print(f"\n  API error ({error}); retrying in {wait}s", file=sys.stderr)
             time.sleep(wait)
