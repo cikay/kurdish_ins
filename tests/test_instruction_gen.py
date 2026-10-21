@@ -136,6 +136,24 @@ class TestRun:
         assert stats["outcomes"] == {KEPT: 1}
         assert (stats["question_words_avg"], stats["answer_words_avg"]) == (1, 3)
 
+    def test_saves_each_chunks_tokens_and_adds_them_up(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
+        BatchStage(FakeBatchClient()).run(tmp_path / "in", tmp_path / "out")
+        responses = [json.loads(l) for l in open(tmp_path / OUT / "responses.jsonl")]
+        assert [r["tokens"] for r in responses] == [{"input": 5, "output": 2, "thinking": 1}] * 2
+        stats = json.load(open(tmp_path / OUT / "stats.json"))
+        assert stats["tokens"] == {"input": 10, "output": 4, "thinking": 2}
+        assert stats["tokens_avg"] == {"input": 5, "output": 2, "thinking": 1}
+
+    def test_rows_saved_without_tokens_are_left_out_of_the_token_average(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
+        (tmp_path / OUT).mkdir()
+        with open(tmp_path / OUT / "responses.jsonl", "w") as rf:
+            rf.write(json.dumps({"key": "id1#0", "outcome": NO_QUESTION, "register_labels": []}) + "\n")
+        BatchStage(FakeBatchClient()).run(tmp_path / "in", tmp_path / "out")
+        stats = json.load(open(tmp_path / OUT / "stats.json"))
+        assert stats["tokens_avg"] == {"input": 5, "output": 2, "thinking": 1}
+
     def test_a_second_run_skips_answered_chunks(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
         (tmp_path / OUT).mkdir()

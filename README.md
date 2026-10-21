@@ -142,10 +142,13 @@ the stage's `PROMPT_NAME` and `THINKING_LEVEL`, so runs with different ones can 
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
 `question`, `answer`, `answer_spans` (each span's `start` and `end` in `context`), `model`,
 `register_labels` and `register_scores`. Every chunk's outcome (`kept`, `no_question`,
-`span_not_found`, `too_short` or `bad_response`) and the model's reply go to
-`responses.jsonl`, and their counts, in total and per label set, to `stats.json`, with the
-average word counts of the kept questions and answers (`question_words_avg`,
-`answer_words_avg`).
+`span_not_found`, `too_short` or `bad_response`), the model's reply and the tokens it used
+(`tokens`: `input`, `output` and `thinking`) go to `responses.jsonl`. Their counts, in total
+and per label set, go to `stats.json`, with the average word counts of the kept questions
+and answers (`question_words_avg`, `answer_words_avg`) and the tokens in total (`tokens`)
+and per chunk (`tokens_avg`). Gemini bills thinking tokens as output; they are counted
+apart to show what the thinking level costs. Rows saved before tokens were recorded have
+none and are left out of `tokens_avg`.
 
 The chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
 as one job, at half the price of one call per chunk. The stage uploads them as

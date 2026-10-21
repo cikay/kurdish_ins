@@ -14,7 +14,9 @@ own Kurmanji, never the model's.
 The chunks go to Gemini's Batch API as one job, at half the price of one call per chunk,
 and the stage waits for it (up to 24 hours).
 
-Each chunk's outcome is appended to `responses.jsonl` as soon as it comes back, so a run
+Each chunk's outcome and the tokens it used are appended to `responses.jsonl` as soon as
+it comes back, and `stats.json` adds the tokens up, so runs with different models or
+thinking levels can be compared on cost as well as on their pairs. A run
 that stops is resumed by running it again: chunks already answered are skipped. A batch
 job's name is kept in `batch_job.json` until its results are saved, so a run stopped while
 waiting waits for the same job again rather than paying for a second one.
@@ -41,6 +43,9 @@ TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words 
 # The reply of a batch result line that holds an error. Not None, which is the model's
 # "no question".
 FAILED = object()
+
+# The token counts saved per chunk, and the usageMetadata field each comes from
+TOKEN_KINDS = {"input": "promptTokenCount", "output": "candidatesTokenCount", "thinking": "thoughtsTokenCount"}
 
 # In the output folder's name, so runs with different prompts can be compared
 PROMPT_NAME = "multi-span"
@@ -85,6 +90,12 @@ def parse_reply(text: str | None):
         return json.loads(text or "null")
     except json.JSONDecodeError:
         return {"unparsed": text}
+
+
+def usage_tokens(usage: dict) -> dict[str, int]:
+    """The input, output and thinking tokens of a response's usageMetadata. Gemini bills
+    thinking as output, but it is kept apart to show what the thinking level costs."""
+    return {kind: usage.get(field, 0) for kind, field in TOKEN_KINDS.items()}
 
 
 def batch_reply(line: dict):
@@ -318,10 +329,9 @@ class InstructionGenStage(Stage):
                     outcomes["already_saved"] += 1
                     continue
                 reply, usage = batch_reply(result)
-                tokens.update({"input": usage.get("promptTokenCount", 0),
-                               "output": usage.get("candidatesTokenCount", 0),
-                               "thinking": usage.get("thoughtsTokenCount", 0)})
-                outcomes[self.save(chunk, reply, rf, mf)] += 1
+                used = usage_tokens(usage)
+                tokens.update(used)
+                outcomes[self.save(chunk, reply, used, rf, mf)] += 1
         print(f"  {job.name}: " + ", ".join(f"{k} {n:,}" for k, n in outcomes.items()))
         print(f"  tokens: input {tokens['input']:,}, output {tokens['output']:,}, thinking {tokens['thinking']:,}")
 
@@ -355,15 +365,16 @@ class InstructionGenStage(Stage):
             },
         }
 
-    def save(self, chunk: dict, reply, rf, mf) -> str:
-        """Check the model's reply for a chunk and append it to `responses.jsonl`, and the pair
-        to `manifest.jsonl` when it is kept. Returns the outcome. A FAILED reply is not
+    def save(self, chunk: dict, reply, tokens: dict[str, int], rf, mf) -> str:
+        """Check the model's reply for a chunk and append it and its tokens to
+        `responses.jsonl`, and the pair to `manifest.jsonl` when it is kept. Returns the outcome. A FAILED reply is not
         written, so a later run asks again."""
         if reply is FAILED:
             return "api_error"
         outcome, pair = check(reply, chunk["text"], self._min_answer_words)
         rf.write(json.dumps({"key": chunk["key"], "outcome": outcome,
-                             "register_labels": chunk["register_labels"], "reply": reply},
+                             "register_labels": chunk["register_labels"], "reply": reply,
+                             "tokens": tokens},
                             ensure_ascii=False) + "\n")
         rf.flush()
         if pair:
@@ -401,9 +412,12 @@ class InstructionGenStage(Stage):
     @staticmethod
     def stats(responses_path: Path) -> dict:
         """Outcomes over every answered chunk, in total and per label set, and the average
-        question and answer word counts of the kept pairs, from `responses.jsonl` (so a
-        resumed run counts the earlier runs' chunks too). An answer's words are its spans'."""
-        total, per_label_set = Counter(), defaultdict(Counter)
+        question and answer word counts of the kept pairs, and the tokens in total and per
+        chunk, from `responses.jsonl` (so a resumed run counts the earlier runs' chunks too).
+        An answer's words are its spans'. Rows written before tokens were saved have none and
+        are left out of the token average."""
+        total, per_label_set, tokens = Counter(), defaultdict(Counter), Counter()
+        with_tokens = 0
         question_words = answer_words = 0
         if responses_path.exists():
             with open(responses_path, encoding="utf-8") as rf:
@@ -411,6 +425,9 @@ class InstructionGenStage(Stage):
                     response = json.loads(line)
                     total[response["outcome"]] += 1
                     per_label_set[" ".join(response["register_labels"]) or "(none)"][response["outcome"]] += 1
+                    if "tokens" in response:
+                        tokens.update(response["tokens"])
+                        with_tokens += 1
                     if response["outcome"] == KEPT:
                         question_words += len(response["reply"]["question"].split())
                         answer_words += sum(len(span.split()) for span in response["reply"]["answer_spans"])
@@ -420,6 +437,9 @@ class InstructionGenStage(Stage):
             "outcomes": dict(total.most_common()),
             "question_words_avg": round(question_words / pairs, 1) if pairs else 0,
             "answer_words_avg": round(answer_words / pairs, 1) if pairs else 0,
+            "tokens": {kind: tokens[kind] for kind in TOKEN_KINDS},
+            "tokens_avg": {kind: round(tokens[kind] / with_tokens, 1) if with_tokens else 0
+                           for kind in TOKEN_KINDS},
             "label_sets": {labels: dict(outcomes.most_common()) for labels, outcomes
                            in sorted(per_label_set.items(), key=lambda kv: -sum(kv[1].values()))},
         }
