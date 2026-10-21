@@ -131,8 +131,11 @@ classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.
 
 `limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
 different prompts, say) ask about the same chunks. A sample run writes its files under
-`data/instruction-gen/limit-<limit>/`, e.g. `data/instruction-gen/limit-200/`, in place of
-the run's folder, so it never mixes with the full run.
+`data/instruction-gen/limit-<limit>-thinking-<level>/`, e.g.
+`data/instruction-gen/limit-200-thinking-low/`, in place of the run's folder, so it never
+mixes with the full run. A full run writes to `data/instruction-gen/<run>-thinking-<level>/`.
+The thinking level is the `THINKING_LEVEL` the stage sends to Gemini, so runs with different
+levels can be compared.
 
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
 `question`, `answer`, `answer_start` (its offset in `context`), `model`,

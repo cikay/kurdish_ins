@@ -42,6 +42,10 @@ TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words 
 # None, which is the model's "no question".
 FAILED = object()
 
+# Thinking tokens are billed as output, and gemini-3.8-flash cannot turn thinking off: LOW is
+# its lowest level
+THINKING_LEVEL = "LOW"
+
 # A batch job is checked this often while it runs
 BATCH_POLL_SECONDS = 60
 BATCH_DONE_STATES = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"}
@@ -134,10 +138,11 @@ class InstructionGenStage(Stage):
         self._client = None
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
-        # A sample run writes to data/instruction-gen/limit-<limit>/ in place of the run's
-        # folder, so it never mixes with the full run
-        if self._limit:
-            output_dir = output_dir.parent / f"limit-{self._limit}"
+        # A sample run writes to data/instruction-gen/limit-<limit>-... in place of the run's
+        # folder, so it never mixes with the full run. The thinking level is in the name too,
+        # so runs with different levels can be compared.
+        name = f"limit-{self._limit}" if self._limit else output_dir.name
+        output_dir = output_dir.parent / f"{name}-thinking-{THINKING_LEVEL.lower()}"
         output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = output_dir / "responses.jsonl"
         answered = self._answered(responses_path)
@@ -329,6 +334,7 @@ class InstructionGenStage(Stage):
                 "generation_config": {
                     "response_mime_type": "application/json",
                     "temperature": self._temperature,
+                    "thinking_config": {"thinking_level": THINKING_LEVEL},
                 },
             },
         }
@@ -377,6 +383,7 @@ class InstructionGenStage(Stage):
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         temperature=self._temperature,
+                        thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
                     ),
                 )
             except errors.ClientError as e:

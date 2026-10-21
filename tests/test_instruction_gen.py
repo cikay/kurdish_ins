@@ -106,6 +106,10 @@ class FakeStage(InstructionGenStage):
         return None
 
 
+# Where a run given tmp_path / "out" writes: the thinking level is added to the folder name
+OUT = "out-thinking-low"
+
+
 def write_manifest(input_dir, records):
     input_dir.mkdir()
     with open(input_dir / "manifest.jsonl", "w", encoding="utf-8") as f:
@@ -116,28 +120,28 @@ class TestRun:
     def test_writes_pairs_responses_and_stats(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2, {"NA": 0.9, "ne": 0.9})])
         FakeStage().run(tmp_path / "in", tmp_path / "out")
-        [pair] = [json.loads(l) for l in open(tmp_path / "out" / "manifest.jsonl")]
+        [pair] = [json.loads(l) for l in open(tmp_path / OUT / "manifest.jsonl")]
         assert (pair["id"], pair["question"], pair["answer"], pair["answer_start"]) == \
             ("id1", "Q?", "one two three", 0)
-        stats = json.load(open(tmp_path / "out" / "stats.json"))
+        stats = json.load(open(tmp_path / OUT / "stats.json"))
         assert stats["outcomes"] == {KEPT: 1}
         assert (stats["question_words_avg"], stats["answer_words_avg"]) == (1, 3)
 
     def test_a_second_run_skips_answered_chunks(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
-        (tmp_path / "out").mkdir()
-        with open(tmp_path / "out" / "responses.jsonl", "w") as rf:
+        (tmp_path / OUT).mkdir()
+        with open(tmp_path / OUT / "responses.jsonl", "w") as rf:
             rf.write(json.dumps({"key": "id1#0", "outcome": NO_QUESTION, "register_labels": []}) + "\n")
         stage_ = FakeStage()
         stage_.run(tmp_path / "in", tmp_path / "out")
         assert len(stage_.asked) == 1
-        assert len(open(tmp_path / "out" / "responses.jsonl").readlines()) == 2
+        assert len(open(tmp_path / OUT / "responses.jsonl").readlines()) == 2
 
     def test_a_limited_run_writes_to_a_limit_folder_beside_the_runs(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
         FakeStage(limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
-        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1"]
-        assert len(open(tmp_path / "instruction-gen" / "limit-1" / "manifest.jsonl").readlines()) == 1
+        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-thinking-low"]
+        assert len(open(tmp_path / "instruction-gen" / "limit-1-thinking-low" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]
@@ -216,11 +220,11 @@ class TestBatch:
         write_manifest(tmp_path / "in", [record(1), record(2)])
         client = FakeBatchClient()
         BatchStage(client).run(tmp_path / "in", tmp_path / "out")
-        pairs = [json.loads(l) for l in open(tmp_path / "out" / "manifest.jsonl")]
+        pairs = [json.loads(l) for l in open(tmp_path / OUT / "manifest.jsonl")]
         assert sorted(p["id"] for p in pairs) == ["id1", "id2"]
         assert {p["answer"] for p in pairs} == {"one two three"}
-        assert not (tmp_path / "out" / "batch_job.json").exists()
-        assert not (tmp_path / "out" / "batch_requests.jsonl").exists()
+        assert not (tmp_path / OUT / "batch_job.json").exists()
+        assert not (tmp_path / OUT / "batch_requests.jsonl").exists()
 
     def test_a_request_is_the_prompt_with_the_generation_config(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1)])
@@ -229,23 +233,24 @@ class TestBatch:
         [[request]] = client.uploaded
         assert request["key"] == "id1#0"
         assert request["request"]["generation_config"] == {
-            "response_mime_type": "application/json", "temperature": 0.3}
+            "response_mime_type": "application/json", "temperature": 0.3,
+            "thinking_config": {"thinking_level": "LOW"}}
 
     def test_a_failed_request_is_sent_again_by_the_next_run(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
         BatchStage(FakeBatchClient(errors={"id1#0"})).run(tmp_path / "in", tmp_path / "out")
-        assert [json.loads(l)["key"] for l in open(tmp_path / "out" / "responses.jsonl")] == ["id2#0"]
+        assert [json.loads(l)["key"] for l in open(tmp_path / OUT / "responses.jsonl")] == ["id2#0"]
         client = FakeBatchClient()
         BatchStage(client).run(tmp_path / "in", tmp_path / "out")
         assert [r["key"] for r in client.uploaded[0]] == ["id1#0"]
 
     def test_a_job_of_an_earlier_run_is_waited_for_not_submitted_again(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1)])
-        (tmp_path / "out").mkdir()
-        (tmp_path / "out" / "batch_job.json").write_text(json.dumps({"name": "batches/1", "chunks": 1}))
+        (tmp_path / OUT).mkdir()
+        (tmp_path / OUT / "batch_job.json").write_text(json.dumps({"name": "batches/1", "chunks": 1}))
         client = FakeBatchClient()
         client.uploaded.append([BatchStage(client).batch_request(
             {"key": "id1#0", "text": "one two three four five"})])
         BatchStage(client).run(tmp_path / "in", tmp_path / "out")
         assert client.created == 0
-        assert len(open(tmp_path / "out" / "manifest.jsonl").readlines()) == 1
+        assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 1
