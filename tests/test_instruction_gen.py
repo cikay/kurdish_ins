@@ -119,6 +119,7 @@ class TestRun:
             ("id1", "Q?", "one two three", 0)
         stats = json.load(open(tmp_path / "out" / "stats.json"))
         assert stats["outcomes"] == {KEPT: 1}
+        assert (stats["question_words_avg"], stats["answer_words_avg"]) == (1, 3)
 
     def test_a_second_run_skips_answered_chunks(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])

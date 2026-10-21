@@ -275,18 +275,26 @@ class InstructionGenStage(Stage):
 
     @staticmethod
     def stats(responses_path: Path) -> dict:
-        """Outcomes over every answered chunk, in total and per label set, from `responses.jsonl`
-        (so a resumed run counts the earlier runs' chunks too)."""
+        """Outcomes over every answered chunk, in total and per label set, and the average
+        question and answer word counts of the kept pairs, from `responses.jsonl` (so a
+        resumed run counts the earlier runs' chunks too)."""
         total, per_label_set = Counter(), defaultdict(Counter)
+        question_words = answer_words = 0
         if responses_path.exists():
             with open(responses_path, encoding="utf-8") as rf:
                 for line in rf:
                     response = json.loads(line)
                     total[response["outcome"]] += 1
                     per_label_set[" ".join(response["register_labels"]) or "(none)"][response["outcome"]] += 1
+                    if response["outcome"] == KEPT:
+                        question_words += len(response["reply"]["question"].split())
+                        answer_words += len(response["reply"]["answer_span"].split())
+        pairs = total[KEPT]
         return {
             "chunks": sum(total.values()),
             "outcomes": dict(total.most_common()),
+            "question_words_avg": round(question_words / pairs, 1) if pairs else 0,
+            "answer_words_avg": round(answer_words / pairs, 1) if pairs else 0,
             "label_sets": {labels: dict(outcomes.most_common()) for labels, outcomes
                            in sorted(per_label_set.items(), key=lambda kv: -sum(kv[1].values()))},
         }
