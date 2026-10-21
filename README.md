@@ -4,7 +4,8 @@ Instruction-tuning data for Kurmanji Kurdish, built from the Kurmanji (`kmr_Latn
 of [FineWeb2](https://huggingface.co/datasets/HuggingFaceFW/fineweb-2) and
 [kurdish-theses-yok](https://huggingface.co/datasets/muzaffercky/kurdish-theses-yok).
 
-The pipeline is built one stage at a time. So far it has one stage, `classify`.
+The pipeline is built one stage at a time. So far it has two stages, `classify` and
+`instruction-gen`.
 
 ## Installation
 
@@ -12,7 +13,7 @@ The pipeline is built one stage at a time. So far it has one stage, `classify`.
 pipenv install --dev
 ```
 
-Later stages call Gemini, so they will need `GEMINI_API_KEY` in `.env`. `classify` does not.
+`instruction-gen` calls Gemini, so it needs `GEMINI_API_KEY` in `.env`. `classify` does not.
 
 ## Usage
 
@@ -75,6 +76,7 @@ data/classify/sample/manifest.jsonl
 | Stage      | Reads                          | Writes                               |
 |------------|--------------------------------|--------------------------------------|
 | `classify` | `sources`, or `input_file`     | `data/classify/<run>/manifest.jsonl` |
+| `instruction-gen` | `data/classify/<run>/manifest.jsonl` | `data/instruction-gen/<run>/manifest.jsonl` |
 
 ### classify
 
@@ -110,6 +112,34 @@ Settings in `config.yml`:
 
 Kurmanji is not one of the classifier's training languages. On a small test set it still
 labelled Wikipedia articles `IN`/`en` and news sites `NA`/`ne`.
+
+### instruction-gen
+
+Asks Gemini for one question per chosen entry, answered by one continuous span copied from
+the entry (the prompt is in `kurdish_ins/prompts.py`), and keeps a pair only when the span
+appears verbatim in the entry. The answer is therefore always the source's own Kurmanji.
+
+It uses an entry when any label of `allow_any` scores above its threshold and no label of
+`forbid_any` does, and every entry of `keep_sources` whatever its scores. Entries of
+`mt_exempt_domains` (Kurdish Wikipedia, Wiktionary and kurdipedia) skip the `MT` check
+only, since the classifier gives many Wikipedia articles a moderate `MT` score. The thresholds
+are per label and read the scores classify wrote, so changing one needs no new classify run. An entry longer than `chunk_words` is cut at line
+breaks, and each chunk gets its own question.
+
+It reads `input_manifest` when that is set, e.g. `data/modal/full/manifest.jsonl` for a
+classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.jsonl`.
+
+`limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
+different prompts, say) ask about the same chunks.
+
+Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
+`question`, `answer`, `answer_start` (its offset in `context`), `model`,
+`register_labels` and `register_scores`. Every chunk's outcome (`kept`, `no_question`,
+`span_not_found`, `too_short` or `bad_response`) and the model's raw reply go to
+`responses.jsonl`, and their counts, in total and per label set, to `stats.json`.
+
+The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
+running it with a changed prompt, move the folder of the earlier run away.
 
 ## How the datasets are read
 

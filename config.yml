@@ -1,5 +1,6 @@
 stages:
   - classify
+  - instruction-gen
 
 classify:
   description: Label each Kurmanji entry's web register, write manifest.jsonl
@@ -36,6 +37,51 @@ classify:
   # significant digits). bfloat16 is several times faster on a GPU but rounds every step,
   # so scores move in the 2nd–3rd decimal and a score near the threshold can cross it.
   dtype: float32
+
+instruction-gen:
+  description: Ask Gemini for one question per chosen entry, answered by its own text
+  # The classify manifest to read instead of data/classify/<run>/manifest.jsonl, e.g. one
+  # downloaded from Modal. Comment it out (or set it to `null`) to read this run's own.
+  input_manifest: data/modal/full/manifest.jsonl
+  # An entry is used when any label of allow_any scores above its threshold and no label of
+  # forbid_any does. The scores are classify's, so changing a threshold needs no new
+  # classify run. Allowed: informational, encyclopedia, biographies, FAQs, how-tos, recipes.
+  # Forbidden: machine-translated, news (and sports, blogs), opinion, promotion and ads, so
+  # the pairs are about facts that do not go out of date.
+  allow_any: {IN: 0.5, en: 0.5, dtp: 0.5, fi: 0.5, HI: 0.5, re: 0.5}
+  # MT is stricter than the others: spam sites auto-translated into Kurmanji often score
+  # below 0.5 on MT and still get IN. 0.2 is a first guess; check what it drops.
+  forbid_any: {MT: 0.2, NA: 0.5, ne: 0.5, sr: 0.5, nb: 0.5, OP: 0.5, IP: 0.5, ds: 0.5}
+  # Sources whose every entry is used, whatever its scores. Many theses get no
+  # label because their windows' scores average out, but all of them are academic text.
+  keep_sources:
+    - muzaffercky/kurdish-theses-yok
+  # Domains whose entries skip the MT check of forbid_any; every other rule still applies.
+  # Many Kurdish Wikipedia articles score MT 0.2-0.3, like the spam sites MT is meant to
+  # drop. Keeping whole domains instead would let in kurdipedia's news and Wikipedia's talk
+  # pages, which allow_any and the other forbid_any labels drop.
+  mt_exempt_domains:
+    - ku.wikipedia.org
+    - ku.m.wikipedia.org
+    - www.kurdipedia.org
+    - ku.wiktionary.org
+  # A longer entry is cut at line breaks into chunks of at most this many words, and each
+  # chunk gets its own question. The theses are about 45,000 words each.
+  chunk_words: 1500
+  # Chunks with fewer words are not sent to the model.
+  min_words: 50
+  model: gemini-3.8-flash
+  temperature: 0.3
+  # A pair whose answer has fewer words is dropped.
+  min_answer_words: 15
+  # Chunks sent to Gemini at the same time. Lower it if most calls are rate limited.
+  workers: 8
+  # Tries per chunk on a rate limit or server error before leaving it for the next run.
+  retries: 3
+  # Chunks sent, picked at random with `seed`: the same seed picks the same chunks for each
+  # prompt, so two sample runs can be compared. Set it to null for every chunk.
+  limit: 200
+  seed: 0
 
 # Where each stage runs on Modal (modal_app/app.py). pipeline.py does not read this.
 modal:

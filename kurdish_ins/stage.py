@@ -21,7 +21,8 @@ def stage_config(name: str, config_path: Path = CONFIG_FILE) -> dict:
 
     Every knob lives there and nowhere else — no stage defines a default in Python, so
     running a stage on its own and running it through `pipeline.py` cannot disagree. The
-    one exception is `classify.input_file`, which may be left out (commented out) to mean
+    exceptions are `classify.input_file` and `instruction-gen.input_manifest`, which may be
+    left out (commented out) to mean
     `null`. `description` is documentation, not a knob, so it is dropped.
     """
     with open(config_path, encoding="utf-8") as f:
