@@ -6,9 +6,10 @@ plus every entry of `keep_sources` whatever its scores. Entries of `mt_exempt_do
 skip the MT check of `forbid_any`, and only that one. A long entry is cut into chunks
 at line breaks and each chunk is asked about on its own.
 
-The model must answer with one span copied from the chunk (see `prompts.py`). A pair is
-kept only when the span appears verbatim in the chunk and is long enough, so the answer is
-always the source's own Kurmanji, never the model's.
+The model must answer with one or more spans copied from the chunk (see `prompts.py`).
+A pair is kept only when every span appears verbatim in the chunk, in order and without
+overlapping, and the spans joined are long enough, so the answer is always the source's
+own Kurmanji, never the model's.
 
 With `batch` set, the chunks go to Gemini's Batch API as one job, at half the price, and
 the stage waits for it (up to 24 hours). Otherwise it sends them one call at a time.
@@ -28,19 +29,22 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from kurdish_ins.prompts import SINGLE_SPAN_PROMPT
+from kurdish_ins.prompts import MULTI_SPAN_PROMPT
 from kurdish_ins.stage import Stage, run_name, stage_config
 
 # What became of a chunk. Only `kept` writes a pair to the manifest.
 KEPT = "kept"
 NO_QUESTION = "no_question"        # the model returned null
 BAD_RESPONSE = "bad_response"      # not JSON, or not the shape the prompt asks for
-SPAN_NOT_FOUND = "span_not_found"  # the span is not in the chunk verbatim
+SPAN_NOT_FOUND = "span_not_found"  # a span is not in the chunk verbatim, in order
 TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words words
 
 # What ask() returns when every retry failed, and a batch result line holds an error. Not
 # None, which is the model's "no question".
 FAILED = object()
+
+# In the output folder's name, so runs with different prompts can be compared
+PROMPT_NAME = "multi-span"
 
 # Thinking tokens are billed as output, and gemini-3.8-flash cannot turn thinking off: LOW is
 # its lowest level
@@ -71,7 +75,7 @@ def chunks(text: str, max_words: int) -> list[str]:
 
 
 def prompt(text: str) -> str:
-    return f"{SINGLE_SPAN_PROMPT}\n\nPassage:\n{text}"
+    return f"{MULTI_SPAN_PROMPT}\n\nPassage:\n{text}"
 
 
 def parse_reply(text: str | None):
@@ -94,22 +98,52 @@ def batch_reply(line: dict):
     return parse_reply(text), response.get("usageMetadata") or {}
 
 
+def locate_spans(spans: list[str], text: str) -> list[tuple[int, int]] | None:
+    """The (start, end) offsets of each span in the text, or None unless every span appears
+    verbatim, in the given order, without overlapping."""
+    offsets, prev_end = [], 0
+    for span in spans:
+        # Searched for from the previous span's end, so it must come after it, not overlapping
+        start = text.find(span, prev_end)
+        if start == -1:
+            return None
+        end = start + len(span)
+        offsets.append((start, end))
+        prev_end = end
+    return offsets
+
+
+def merge_spans(text: str, offsets: list[tuple[int, int]]) -> str:
+    """The spans joined in order: by a blank line where a line break was skipped, by a space
+    where other text was, and as they are where nothing was."""
+    parts = [text[offsets[0][0]:offsets[0][1]]]
+    for (_, prev_end), (start, end) in zip(offsets, offsets[1:]):
+        gap = text[prev_end:start]
+        if gap:
+            parts.append("\n\n" if "\n" in gap else " ")
+        parts.append(text[start:end])
+    return "".join(parts)
+
+
 def check(reply, text: str, min_answer_words: int):
-    """(outcome, pair) for what the model returned. `pair` is (question, answer, start)
-    when the outcome is `kept`, else None."""
+    """(outcome, pair) for what the model returned. `pair` is (question, answer, offsets)
+    when the outcome is `kept`, else None; the answer is the spans joined."""
     if reply is None:
         return NO_QUESTION, None
     if not isinstance(reply, dict):
         return BAD_RESPONSE, None
-    question, answer = reply.get("question"), reply.get("answer_span")
-    if not isinstance(question, str) or not isinstance(answer, str) or not question.strip() or not answer.strip():
+    question, spans = reply.get("question"), reply.get("answer_spans")
+    if (not isinstance(question, str) or not question.strip()
+            or not isinstance(spans, list) or not spans
+            or not all(isinstance(span, str) and span.strip() for span in spans)):
         return BAD_RESPONSE, None
-    start = text.find(answer)
-    if start == -1:
+    offsets = locate_spans(spans, text)
+    if offsets is None:
         return SPAN_NOT_FOUND, None
+    answer = merge_spans(text, offsets)
     if len(answer.split()) < min_answer_words:
         return TOO_SHORT, None
-    return KEPT, (question.strip(), answer, start)
+    return KEPT, (question.strip(), answer, offsets)
 
 
 class InstructionGenStage(Stage):
@@ -139,10 +173,10 @@ class InstructionGenStage(Stage):
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
         # A sample run writes to data/instruction-gen/limit-<limit>-... in place of the run's
-        # folder, so it never mixes with the full run. The thinking level is in the name too,
-        # so runs with different levels can be compared.
+        # folder, so it never mixes with the full run. The prompt and the thinking level are
+        # in the name too, so runs with different ones can be compared.
         name = f"limit-{self._limit}" if self._limit else output_dir.name
-        output_dir = output_dir.parent / f"{name}-thinking-{THINKING_LEVEL.lower()}"
+        output_dir = output_dir.parent / f"{name}-{PROMPT_NAME}-thinking-{THINKING_LEVEL.lower()}"
         output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = output_dir / "responses.jsonl"
         answered = self._answered(responses_path)
@@ -355,7 +389,7 @@ class InstructionGenStage(Stage):
             mf.flush()
         return outcome
 
-    def record(self, chunk: dict, question: str, answer: str, start: int) -> dict:
+    def record(self, chunk: dict, question: str, answer: str, offsets: list[tuple[int, int]]) -> dict:
         return {
             "source": chunk["source"],
             "id": chunk["id"],
@@ -365,7 +399,7 @@ class InstructionGenStage(Stage):
             "context": chunk["text"],
             "question": question,
             "answer": answer,
-            "answer_start": start,
+            "answer_spans": [{"start": start, "end": end} for start, end in offsets],
             "model": self._model,
             "register_labels": chunk["register_labels"],
             "register_scores": chunk["register_scores"],
@@ -419,7 +453,7 @@ class InstructionGenStage(Stage):
     def stats(responses_path: Path) -> dict:
         """Outcomes over every answered chunk, in total and per label set, and the average
         question and answer word counts of the kept pairs, from `responses.jsonl` (so a
-        resumed run counts the earlier runs' chunks too)."""
+        resumed run counts the earlier runs' chunks too). An answer's words are its spans'."""
         total, per_label_set = Counter(), defaultdict(Counter)
         question_words = answer_words = 0
         if responses_path.exists():
@@ -430,7 +464,7 @@ class InstructionGenStage(Stage):
                     per_label_set[" ".join(response["register_labels"]) or "(none)"][response["outcome"]] += 1
                     if response["outcome"] == KEPT:
                         question_words += len(response["reply"]["question"].split())
-                        answer_words += len(response["reply"]["answer_span"].split())
+                        answer_words += sum(len(span.split()) for span in response["reply"]["answer_spans"])
         pairs = total[KEPT]
         return {
             "chunks": sum(total.values()),

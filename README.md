@@ -115,9 +115,11 @@ labelled Wikipedia articles `IN`/`en` and news sites `NA`/`ne`.
 
 ### instruction-gen
 
-Asks Gemini for one question per chosen entry, answered by one continuous span copied from
-the entry (the prompt is in `kurdish_ins/prompts.py`), and keeps a pair only when the span
-appears verbatim in the entry. The answer is therefore always the source's own Kurmanji.
+Asks Gemini for one question per chosen entry, answered by one or more spans copied from the
+entry (the prompt is in `kurdish_ins/prompts.py`). It keeps a pair only when every span
+appears verbatim in the entry, in order and without overlapping, and joins the spans in
+that order into the answer: by a blank line where a line break was skipped, by a space
+where other text was. The answer is therefore always the source's own Kurmanji.
 
 It uses an entry when any label of `allow_any` scores above its threshold and no label of
 `forbid_any` does, and every entry of `keep_sources` whatever its scores. Entries of
@@ -131,14 +133,14 @@ classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.
 
 `limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
 different prompts, say) ask about the same chunks. A sample run writes its files under
-`data/instruction-gen/limit-<limit>-thinking-<level>/`, e.g.
-`data/instruction-gen/limit-200-thinking-low/`, in place of the run's folder, so it never
-mixes with the full run. A full run writes to `data/instruction-gen/<run>-thinking-<level>/`.
-The thinking level is the `THINKING_LEVEL` the stage sends to Gemini, so runs with different
-levels can be compared.
+`data/instruction-gen/limit-<limit>-<prompt>-thinking-<level>/`, e.g.
+`data/instruction-gen/limit-200-multi-span-thinking-low/`, in place of the run's folder, so
+it never mixes with the full run. A full run writes to
+`data/instruction-gen/<run>-<prompt>-thinking-<level>/`. The prompt and thinking level are
+the stage's `PROMPT_NAME` and `THINKING_LEVEL`, so runs with different ones can be compared.
 
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
-`question`, `answer`, `answer_start` (its offset in `context`), `model`,
+`question`, `answer`, `answer_spans` (each span's `start` and `end` in `context`), `model`,
 `register_labels` and `register_scores`. Every chunk's outcome (`kept`, `no_question`,
 `span_not_found`, `too_short` or `bad_response`) and the model's reply go to
 `responses.jsonl`, and their counts, in total and per label set, to `stats.json`, with the

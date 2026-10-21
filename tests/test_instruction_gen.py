@@ -66,25 +66,50 @@ class TestCheck:
     TEXT = "First sentence here. Second sentence follows. Third one."
 
     def test_a_verbatim_span_is_kept(self):
-        assert check({"question": " Q? ", "answer_span": "Second sentence follows."}, self.TEXT, 3) == \
-            (KEPT, ("Q?", "Second sentence follows.", 21))
+        assert check({"question": " Q? ", "answer_spans": ["Second sentence follows."]}, self.TEXT, 3) == \
+            (KEPT, ("Q?", "Second sentence follows.", [(21, 45)]))
+
+    def test_spans_are_joined_in_order(self):
+        outcome, (_, answer, offsets) = check(
+            {"question": "Q?", "answer_spans": ["First sentence here.", "Third one."]}, self.TEXT, 3)
+        assert (outcome, answer, offsets) == (KEPT, "First sentence here. Third one.", [(0, 20), (46, 56)])
+
+    def test_a_skipped_line_break_is_a_blank_line(self):
+        outcome, (_, answer, _) = check(
+            {"question": "Q?", "answer_spans": ["One two three.", "Seven eight nine."]},
+            "One two three.\nFour five six.\nSeven eight nine.", 3)
+        assert (outcome, answer) == (KEPT, "One two three.\n\nSeven eight nine.")
+
+    def test_any_number_of_spans(self):
+        sentences = [f"Sentence {i} here." for i in range(10)]
+        outcome, (_, answer, _) = check({"question": "Q?", "answer_spans": sentences[::2]}, " ".join(sentences), 3)
+        assert (outcome, answer) == (KEPT, " ".join(sentences[::2]))
+
+    def test_spans_out_of_order_are_not_found(self):
+        assert check({"question": "Q?", "answer_spans": ["Third one.", "First sentence here."]},
+                     self.TEXT, 3) == (SPAN_NOT_FOUND, None)
+
+    def test_overlapping_spans_are_not_found(self):
+        assert check({"question": "Q?", "answer_spans": ["First sentence here.", "here. Second"]},
+                     self.TEXT, 3) == (SPAN_NOT_FOUND, None)
 
     def test_a_rephrased_span_is_not_found(self):
-        assert check({"question": "Q?", "answer_span": "Second sentence is next."},
+        assert check({"question": "Q?", "answer_spans": ["Second sentence is next."]},
                      self.TEXT, 3) == (SPAN_NOT_FOUND, None)
 
     def test_a_short_answer(self):
-        assert check({"question": "Q?", "answer_span": "Third one."}, self.TEXT, 3) == (TOO_SHORT, None)
+        assert check({"question": "Q?", "answer_spans": ["Third one."]}, self.TEXT, 3) == (TOO_SHORT, None)
 
     def test_null_is_no_question(self):
         assert check(None, self.TEXT, 3) == (NO_QUESTION, None)
 
     @pytest.mark.parametrize("reply", [
         {"unparsed": "x"},
-        [{"question": "Q?", "answer_span": "First sentence here."}],  # a list, not one object
-        {"answer_span": "First sentence here."},
-        {"question": "Q?", "answer_span": ["First sentence here."]},  # a list is the multi-span schema
-        {"question": "Q?", "answer_span": " "},
+        [{"question": "Q?", "answer_spans": ["First sentence here."]}],  # a list, not one object
+        {"answer_spans": ["First sentence here."]},
+        {"question": "Q?", "answer_span": "First sentence here."},  # the single-span schema
+        {"question": "Q?", "answer_spans": []},
+        {"question": "Q?", "answer_spans": ["First sentence here.", " "]},
     ])
     def test_a_bad_response(self, reply):
         assert check(reply, self.TEXT, 3) == (BAD_RESPONSE, None)
@@ -99,15 +124,15 @@ class FakeStage(InstructionGenStage):
 
     def ask(self, text):
         self.asked.append(text)
-        return {"question": "Q?", "answer_span": " ".join(text.split()[:3])}
+        return {"question": "Q?", "answer_spans": [" ".join(text.split()[:3])]}
 
     @staticmethod
     def _make_client():
         return None
 
 
-# Where a run given tmp_path / "out" writes: the thinking level is added to the folder name
-OUT = "out-thinking-low"
+# Where a run given tmp_path / "out" writes: the prompt and thinking level are added to its name
+OUT = "out-multi-span-thinking-low"
 
 
 def write_manifest(input_dir, records):
@@ -121,8 +146,8 @@ class TestRun:
         write_manifest(tmp_path / "in", [record(1), record(2, {"NA": 0.9, "ne": 0.9})])
         FakeStage().run(tmp_path / "in", tmp_path / "out")
         [pair] = [json.loads(l) for l in open(tmp_path / OUT / "manifest.jsonl")]
-        assert (pair["id"], pair["question"], pair["answer"], pair["answer_start"]) == \
-            ("id1", "Q?", "one two three", 0)
+        assert (pair["id"], pair["question"], pair["answer"], pair["answer_spans"]) == \
+            ("id1", "Q?", "one two three", [{"start": 0, "end": 13}])
         stats = json.load(open(tmp_path / OUT / "stats.json"))
         assert stats["outcomes"] == {KEPT: 1}
         assert (stats["question_words_avg"], stats["answer_words_avg"]) == (1, 3)
@@ -140,8 +165,8 @@ class TestRun:
     def test_a_limited_run_writes_to_a_limit_folder_beside_the_runs(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
         FakeStage(limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
-        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-thinking-low"]
-        assert len(open(tmp_path / "instruction-gen" / "limit-1-thinking-low" / "manifest.jsonl").readlines()) == 1
+        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-multi-span-thinking-low"]
+        assert len(open(tmp_path / "instruction-gen" / "limit-1-multi-span-thinking-low" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]
@@ -161,9 +186,9 @@ class TestBatchReply:
     def test_the_text_parts_are_the_reply(self):
         line = {"key": "k", "response": {
             "candidates": [{"content": {"parts": [{"text": "thinking...", "thought": True},
-                                                  {"text": '{"question": "Q?", '}, {"text": '"answer_span": "a"}'}]}}],
+                                                  {"text": '{"question": "Q?", '}, {"text": '"answer_spans": ["a"]}'}]}}],
             "usageMetadata": {"promptTokenCount": 10}}}
-        assert batch_reply(line) == ({"question": "Q?", "answer_span": "a"}, {"promptTokenCount": 10})
+        assert batch_reply(line) == ({"question": "Q?", "answer_spans": ["a"]}, {"promptTokenCount": 10})
 
     def test_an_error_line_failed(self):
         assert batch_reply({"key": "k", "error": {"code": 500}}) == (FAILED, {})
@@ -199,7 +224,7 @@ class FakeBatchClient:
                 lines.append({"key": request["key"], "error": {"code": 500}})
                 continue
             passage = request["request"]["contents"][0]["parts"][0]["text"].split("Passage:\n")[1]
-            reply = {"question": "Q?", "answer_span": " ".join(passage.split()[:3])}
+            reply = {"question": "Q?", "answer_spans": [" ".join(passage.split()[:3])]}
             lines.append({"key": request["key"], "response": {
                 "candidates": [{"content": {"parts": [{"text": json.dumps(reply)}]}}],
                 "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "thoughtsTokenCount": 1}}})
