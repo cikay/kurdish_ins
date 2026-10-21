@@ -28,10 +28,13 @@ from kurdish_ins.stage import Stage, run_name, stage_config
 
 # What became of a chunk. Only `kept` writes a pair to the manifest.
 KEPT = "kept"
-NO_QUESTION = "no_question"        # the model returned an empty list
+NO_QUESTION = "no_question"        # the model returned null
 BAD_RESPONSE = "bad_response"      # not JSON, or not the shape the prompt asks for
 SPAN_NOT_FOUND = "span_not_found"  # the span is not in the chunk verbatim
 TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words words
+
+# What ask() returns when every retry failed. Not None, which is the model's "no question".
+FAILED = object()
 
 
 def chunks(text: str, max_words: int) -> list[str]:
@@ -53,17 +56,14 @@ def chunks(text: str, max_words: int) -> list[str]:
     return pieces
 
 
-def check(items, text: str, min_answer_words: int):
+def check(reply, text: str, min_answer_words: int):
     """(outcome, pair) for what the model returned. `pair` is (question, answer, start)
-    when the outcome is `kept`, else None. Only the first item counts: one question per chunk."""
-    if not isinstance(items, list):
-        return BAD_RESPONSE, None
-    if not items:
+    when the outcome is `kept`, else None."""
+    if reply is None:
         return NO_QUESTION, None
-    item = items[0]
-    if not isinstance(item, dict):
+    if not isinstance(reply, dict):
         return BAD_RESPONSE, None
-    question, answer = item.get("question"), item.get("answer_span")
+    question, answer = reply.get("question"), reply.get("answer_span")
     if not isinstance(question, str) or not isinstance(answer, str) or not question.strip() or not answer.strip():
         return BAD_RESPONSE, None
     start = text.find(answer)
@@ -196,14 +196,14 @@ class InstructionGenStage(Stage):
             futures = {pool.submit(self.ask, chunk["text"]): chunk for chunk in todo}
             try:
                 for count, future in enumerate(as_completed(futures), 1):
-                    chunk, items = futures[future], future.result()
-                    if items is None:  # every retry failed; a later run asks again
+                    chunk, reply = futures[future], future.result()
+                    if reply is FAILED:  # a later run asks again
                         outcomes["api_error"] += 1
                         continue
-                    outcome, pair = check(items, chunk["text"], self._min_answer_words)
+                    outcome, pair = check(reply, chunk["text"], self._min_answer_words)
                     outcomes[outcome] += 1
                     rf.write(json.dumps({"key": chunk["key"], "outcome": outcome,
-                                         "register_labels": chunk["register_labels"], "items": items},
+                                         "register_labels": chunk["register_labels"], "reply": reply},
                                         ensure_ascii=False) + "\n")
                     rf.flush()
                     if pair:
@@ -233,7 +233,7 @@ class InstructionGenStage(Stage):
         }
 
     def ask(self, text: str):
-        """The parsed JSON the model returned for a chunk, or None when every retry failed."""
+        """The parsed JSON the model returned for a chunk, or FAILED when every retry failed."""
         from google.genai import errors, types
 
         for attempt in range(self._retries):
@@ -253,13 +253,13 @@ class InstructionGenStage(Stage):
                 error = str(e)
             else:
                 try:
-                    return json.loads(response.text or "[]")
+                    return json.loads(response.text or "null")
                 except json.JSONDecodeError:
                     return {"unparsed": response.text}  # check() calls it a bad response
             wait = 2 ** attempt * 5
             print(f"\n  API error ({error}); retrying in {wait}s", file=sys.stderr)
             time.sleep(wait)
-        return None
+        return FAILED
 
     @staticmethod
     def _make_client():

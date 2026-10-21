@@ -64,28 +64,28 @@ class TestCheck:
     TEXT = "First sentence here. Second sentence follows. Third one."
 
     def test_a_verbatim_span_is_kept(self):
-        assert check([{"question": " Q? ", "answer_span": "Second sentence follows."}], self.TEXT, 3) == \
+        assert check({"question": " Q? ", "answer_span": "Second sentence follows."}, self.TEXT, 3) == \
             (KEPT, ("Q?", "Second sentence follows.", 21))
 
     def test_a_rephrased_span_is_not_found(self):
-        assert check([{"question": "Q?", "answer_span": "Second sentence is next."}],
+        assert check({"question": "Q?", "answer_span": "Second sentence is next."},
                      self.TEXT, 3) == (SPAN_NOT_FOUND, None)
 
     def test_a_short_answer(self):
-        assert check([{"question": "Q?", "answer_span": "Third one."}], self.TEXT, 3) == (TOO_SHORT, None)
+        assert check({"question": "Q?", "answer_span": "Third one."}, self.TEXT, 3) == (TOO_SHORT, None)
 
-    def test_an_empty_list(self):
-        assert check([], self.TEXT, 3) == (NO_QUESTION, None)
+    def test_null_is_no_question(self):
+        assert check(None, self.TEXT, 3) == (NO_QUESTION, None)
 
-    @pytest.mark.parametrize("items", [
+    @pytest.mark.parametrize("reply", [
         {"unparsed": "x"},
-        ["x"],
-        [{"answer_span": "First sentence here."}],
-        [{"question": "Q?", "answer_span": ["First sentence here."]}],  # a list is the multi-span schema
-        [{"question": "Q?", "answer_span": " "}],
+        [{"question": "Q?", "answer_span": "First sentence here."}],  # a list, not one object
+        {"answer_span": "First sentence here."},
+        {"question": "Q?", "answer_span": ["First sentence here."]},  # a list is the multi-span schema
+        {"question": "Q?", "answer_span": " "},
     ])
-    def test_a_bad_response(self, items):
-        assert check(items, self.TEXT, 3) == (BAD_RESPONSE, None)
+    def test_a_bad_response(self, reply):
+        assert check(reply, self.TEXT, 3) == (BAD_RESPONSE, None)
 
 
 class FakeStage(InstructionGenStage):
@@ -97,7 +97,7 @@ class FakeStage(InstructionGenStage):
 
     def ask(self, text):
         self.asked.append(text)
-        return [{"question": "Q?", "answer_span": " ".join(text.split()[:3])}]
+        return {"question": "Q?", "answer_span": " ".join(text.split()[:3])}
 
     @staticmethod
     def _make_client():

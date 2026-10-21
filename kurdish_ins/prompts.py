@@ -28,11 +28,9 @@ Step 2: Write exactly 1 question or instruction in Kurmanji. Rules:
   - Never refer to the passage itself: no "according to the text/article/news", "in this
     passage", "the author", "the girl", "the town", "article 49" without the law's name, etc.
   - If the passage does not give enough context to make a question self-contained (e.g. it
-    quotes "article 49" but never says which law), return an empty list.
+    quotes "article 49" but never says which law), return null.
 - Copy the answer span character for character. Do not translate, shorten, or rephrase it.
-- If no question with a long, complete answer exists, return an empty list.
+- If no question with a long, complete answer exists, return null.
 
-Output valid JSON only: a list with one item, or an empty list:
-[
-  {"question": "...", "answer_span": "exact text copied from the passage"}
-]"""
+Output valid JSON only: one object, or null:
+{"question": "...", "answer_span": "exact text copied from the passage"}"""

@@ -137,7 +137,7 @@ full run.
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
 `question`, `answer`, `answer_start` (its offset in `context`), `model`,
 `register_labels` and `register_scores`. Every chunk's outcome (`kept`, `no_question`,
-`span_not_found`, `too_short` or `bad_response`) and the model's raw reply go to
+`span_not_found`, `too_short` or `bad_response`) and the model's reply go to
 `responses.jsonl`, and their counts, in total and per label set, to `stats.json`.
 
 The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
