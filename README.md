@@ -149,8 +149,9 @@ average word counts of the kept questions and answers (`question_words_avg`,
 
 The chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
 as one job, at half the price of one call per chunk. The stage uploads them as
-`batch_requests.jsonl`, writes the job's name to `batch_job.json` and checks the job every
-minute until it ends (Google's target is 24 hours). It then saves the results and
+`batch_requests.jsonl`, writes the job's name to `batch_job.json` and checks the job until
+it ends (Google's target is 24 hours): after 10 seconds, then twice as long after each
+check, up to every 10 minutes. It then saves the results and
 deletes both files. If the stage is stopped while it waits, running it
 again waits for the same job rather than submitting (and paying for) a second one. Chunks
 the job failed are sent by the next run.

@@ -49,8 +49,10 @@ PROMPT_NAME = "multi-span"
 # its lowest level
 THINKING_LEVEL = "LOW"
 
-# A batch job is checked this often while it runs
-BATCH_POLL_SECONDS = 60
+# A batch job is checked after this many seconds, then twice as long after each check, up
+# to BATCH_POLL_MAX_SECONDS: a small job is seen soon, and a long one is not checked often
+BATCH_POLL_FIRST_SECONDS = 10
+BATCH_POLL_MAX_SECONDS = 600
 BATCH_DONE_STATES = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"}
 
 
@@ -324,16 +326,20 @@ class InstructionGenStage(Stage):
         print(f"  tokens: input {tokens['input']:,}, output {tokens['output']:,}, thinking {tokens['thinking']:,}")
 
     def _wait(self, name: str):
-        """The batch job once it has ended, checking it every BATCH_POLL_SECONDS."""
+        """The batch job once it has ended. The wait between checks doubles from
+        BATCH_POLL_FIRST_SECONDS up to BATCH_POLL_MAX_SECONDS."""
         started = time.monotonic()
+        wait = BATCH_POLL_FIRST_SECONDS
         while True:
             job = self._client.batches.get(name=name)
             if job.state.name in BATCH_DONE_STATES:
                 print()
                 return job
             minutes = (time.monotonic() - started) / 60
-            print(f"  {job.state.name} ({minutes:.0f} min)", end="\r", flush=True)
-            time.sleep(BATCH_POLL_SECONDS)
+            print(f"  {job.state.name} ({minutes:.0f} min, next check in {wait // 60}m{wait % 60:02d}s)",
+                  end="\r", flush=True)
+            time.sleep(wait)
+            wait = min(wait * 2, BATCH_POLL_MAX_SECONDS)
 
     def batch_request(self, chunk: dict) -> dict:
         """One line of a Batch API input file: the request for the chunk."""

@@ -263,3 +263,16 @@ class TestBatch:
         BatchStage(client).run(tmp_path / "in", tmp_path / "out")
         assert client.created == 0
         assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 1
+
+
+class TestWait:
+    def test_the_wait_doubles_up_to_ten_minutes(self, monkeypatch):
+        states = ["JOB_STATE_PENDING"] + ["JOB_STATE_RUNNING"] * 8 + ["JOB_STATE_SUCCEEDED"]
+        client = SimpleNamespace(batches=SimpleNamespace(
+            get=lambda name: SimpleNamespace(name=name, state=SimpleNamespace(name=states.pop(0)))))
+        waits = []
+        monkeypatch.setattr("kurdish_ins.instruction_gen.time.sleep", waits.append)
+        stage_ = stage()
+        stage_._client = client
+        assert stage_._wait("batches/1").state.name == "JOB_STATE_SUCCEEDED"
+        assert waits == [10, 20, 40, 80, 160, 320, 600, 600, 600]
