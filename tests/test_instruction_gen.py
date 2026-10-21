@@ -122,11 +122,19 @@ class TestRun:
 
     def test_a_second_run_skips_answered_chunks(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
+        (tmp_path / "out").mkdir()
+        with open(tmp_path / "out" / "responses.jsonl", "w") as rf:
+            rf.write(json.dumps({"key": "id1#0", "outcome": NO_QUESTION, "register_labels": []}) + "\n")
+        stage_ = FakeStage()
+        stage_.run(tmp_path / "in", tmp_path / "out")
+        assert len(stage_.asked) == 1
+        assert len(open(tmp_path / "out" / "responses.jsonl").readlines()) == 2
+
+    def test_a_limited_run_writes_under_limit_folder(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
         FakeStage(limit=1).run(tmp_path / "in", tmp_path / "out")
-        second = FakeStage()
-        second.run(tmp_path / "in", tmp_path / "out")
-        assert len(second.asked) == 1
-        assert len(open(tmp_path / "out" / "manifest.jsonl").readlines()) == 2
+        assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["limit-1"]
+        assert len(open(tmp_path / "out" / "limit-1" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]

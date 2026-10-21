@@ -99,6 +99,9 @@ class InstructionGenStage(Stage):
         self._client = None
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
+        # A sample run writes under limit-<limit>/, so it never mixes with the full run
+        if self._limit:
+            output_dir = output_dir / f"limit-{self._limit}"
         output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = output_dir / "responses.jsonl"
         answered = self._answered(responses_path)
@@ -172,7 +175,7 @@ class InstructionGenStage(Stage):
         """The chunks in a shuffled order fixed by `seed`, cut to `limit`.
 
         The same seed picks the same chunks every time, so sample runs with different prompts
-        can be compared pair by pair, and a full run resumes a sample run.
+        can be compared pair by pair.
         """
         chunks = list(chunks)
         random.Random(self._seed).shuffle(chunks)
