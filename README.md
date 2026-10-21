@@ -132,12 +132,13 @@ It reads `input_manifest` when that is set, e.g. `data/modal/full/manifest.jsonl
 classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.jsonl`.
 
 `limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
-different prompts, say) ask about the same chunks. A sample run writes its files under
-`data/instruction-gen/limit-<limit>-<prompt>-thinking-<level>/`, e.g.
-`data/instruction-gen/limit-200-multi-span-thinking-low/`, in place of the run's folder, so
-it never mixes with the full run. A full run writes to
-`data/instruction-gen/<run>-<prompt>-thinking-<level>/`. The prompt and thinking level are
-the stage's `PROMPT_NAME` and `THINKING_LEVEL`, so runs with different ones can be compared.
+different prompts or models, say) ask about the same chunks. A sample run writes its files under
+`data/instruction-gen/limit-<limit>-<model>-<prompt>-thinking-<level>/`, e.g.
+`data/instruction-gen/limit-200-gemini-3.8-flash-multi-span-thinking-low/`, in place of the
+run's folder, so it never mixes with the full run. A full run writes to
+`data/instruction-gen/<run>-<model>-<prompt>-thinking-<level>/`. The model is `model` in
+`config.yml`; the prompt and thinking level are the stage's `PROMPT_NAME` and
+`THINKING_LEVEL`. So runs with different ones can be compared.
 
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
 `question`, `answer`, `answer_spans` (each span's `start` and `end` in `context`), `model`,

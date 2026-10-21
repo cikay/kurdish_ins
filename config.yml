@@ -75,9 +75,9 @@ instruction-gen:
   # A pair whose answer has fewer words is dropped.
   min_answer_words: 15
   # Chunks sent, picked at random with `seed`: the same seed picks the same chunks for each
-  # prompt, so two sample runs can be compared. The files go to data/instruction-gen/
-  # limit-<limit>-<prompt>-thinking-<level>/, e.g.
-  # data/instruction-gen/limit-200-multi-span-thinking-low/.
+  # prompt or model, so two sample runs can be compared. The files go to data/instruction-gen/
+  # limit-<limit>-<model>-<prompt>-thinking-<level>/, e.g.
+  # data/instruction-gen/limit-200-gemini-3.8-flash-multi-span-thinking-low/.
   # Set it to null for every chunk.
   limit: 20
   seed: 0

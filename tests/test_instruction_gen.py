@@ -116,7 +116,7 @@ class TestCheck:
 
 
 # Where a run given tmp_path / "out" writes: the prompt and thinking level are added to its name
-OUT = "out-multi-span-thinking-low"
+OUT = "out-m-multi-span-thinking-low"
 
 
 def write_manifest(input_dir, records):
@@ -167,8 +167,8 @@ class TestRun:
     def test_a_limited_run_writes_to_a_limit_folder_beside_the_runs(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
         BatchStage(FakeBatchClient(), limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
-        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-multi-span-thinking-low"]
-        assert len(open(tmp_path / "instruction-gen" / "limit-1-multi-span-thinking-low" / "manifest.jsonl").readlines()) == 1
+        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-m-multi-span-thinking-low"]
+        assert len(open(tmp_path / "instruction-gen" / "limit-1-m-multi-span-thinking-low" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]

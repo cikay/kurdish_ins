@@ -182,10 +182,10 @@ class InstructionGenStage(Stage):
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
         # A sample run writes to data/instruction-gen/limit-<limit>-... in place of the run's
-        # folder, so it never mixes with the full run. The prompt and the thinking level are
-        # in the name too, so runs with different ones can be compared.
+        # folder, so it never mixes with the full run. The model, the prompt and the thinking
+        # level are in the name too, so runs with different ones can be compared.
         name = f"limit-{self._limit}" if self._limit else output_dir.name
-        output_dir = output_dir.parent / f"{name}-{PROMPT_NAME}-thinking-{THINKING_LEVEL.lower()}"
+        output_dir = output_dir.parent / f"{name}-{self._model}-{PROMPT_NAME}-thinking-{THINKING_LEVEL.lower()}"
         output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = output_dir / "responses.jsonl"
         answered = self._answered(responses_path)
