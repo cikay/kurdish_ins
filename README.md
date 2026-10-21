@@ -159,29 +159,6 @@ the job failed are sent by the next run.
 The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
 running it with a changed prompt, move the folder of the earlier run away.
 
-## How the datasets are read
-
-`kurdish_ins/hub.py` downloads a source's parquet files into the Hugging Face cache and
-reads them locally. FineWeb2's `kmr_Latn` is a single 562 MB file, the theses' one 65 MB
-file, and each is downloaded once.
-
-It does not use `load_dataset(..., streaming=True)`, because a stream that is not read to
-the end hangs the process at exit. pyarrow reads the next chunk over HTTP on one of its own
-threads. Python kills that thread in the middle of the request when it shuts down, and
-arrow's thread pool then waits for the thread forever. Closing the stream or turning off
-pre-buffering does not cancel a read that has already started. A local file leaves no read
-in flight.
-
-## Adding a stage
-
-1. Write a `Stage` subclass in `kurdish_ins/` with a `name` and
-   `run(input_dir, output_dir)`. Read `input_dir / "manifest.jsonl"` and write
-   `output_dir / "manifest.jsonl"`.
-2. Register it in `REGISTRY` in `pipeline.py`.
-3. Add its name to `stages` in `config.yml`, plus a section with a `description` and its
-   settings. Every setting is passed to the stage's constructor as a keyword argument.
-   Stages define no defaults in Python, so all settings live in `config.yml`.
-
 ## Scripts
 
 Standalone tools in `scripts/`, run as modules:
@@ -192,31 +169,34 @@ python -m scripts.sample_fineweb   # 200 entries over 300 words, at most 3 per d
 
 Options: `--total`, `--per-domain`, `--min-words` and `--output`.
 
+```bash
+python -m scripts.count_filter     # entries, words and chunks instruction-gen's filter keeps, without calling Gemini
+```
+
+`--save before.json`, then edit `allow_any` or `forbid_any` and run it with
+`--compare before.json` to see what the change does.
+
 ## Tests
 
 ```bash
 pipenv run pytest
 ```
 
-The tests never load the classifier model or download a dataset. They pass a fake
-classifier to `ClassifyStage.classify`.
-
 ## Layout
 
 ```
 pipeline.py            runs the stages listed in config.yml
 config.yml             stage order and every stage setting
+s5.jsonl               a 5-entry sample for classify.input_file
 kurdish_ins/
   stage.py             Stage base class, stage_config, run_name, load_manifest
   classify.py          classify stage
   register_classifier.py  the register model and its labels
+  instruction_gen.py   instruction-gen stage
+  prompts.py           the prompts instruction-gen sends to Gemini
   hub.py               reads a dataset from local parquet files
   logs.py              logging setup
 modal_app/app.py       runs stages on Modal
 scripts/               standalone tools
 tests/
 ```
-
-The files at the root other than `pipeline.py` (`generate_pairs.py`,
-`prepare_register_data.py`, `test_register_classifier.py`, `compare_lengths.py`) are from
-before the pipeline. They will be replaced by stages.
