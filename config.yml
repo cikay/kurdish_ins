@@ -74,15 +74,6 @@ instruction-gen:
   temperature: 0.3
   # A pair whose answer has fewer words is dropped.
   min_answer_words: 15
-  # true: send the chunks as one Batch API job, at half the price; the stage waits for it,
-  # up to 24 hours. false: one call per chunk, `workers` at a time, for quick checks.
-  batch: true
-  # Chunks sent to Gemini at the same time when batch is false. Lower it if most calls are
-  # rate limited.
-  workers: 8
-  # Tries per chunk on a rate limit or server error before leaving it for the next run, when
-  # batch is false.
-  retries: 3
   # Chunks sent, picked at random with `seed`: the same seed picks the same chunks for each
   # prompt, so two sample runs can be compared. The files go to data/instruction-gen/
   # limit-<limit>-<prompt>-thinking-<level>/, e.g.

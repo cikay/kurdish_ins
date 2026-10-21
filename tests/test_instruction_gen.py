@@ -12,7 +12,7 @@ from kurdish_ins.instruction_gen import (BAD_RESPONSE, FAILED, KEPT, NO_QUESTION
 STAGE_KWARGS = dict(allow_any={"IN": 0.5, "HI": 0.5}, forbid_any={"MT": 0.2, "NA": 0.5},
                     keep_sources=["theses"], mt_exempt_domains=["wiki.org"], min_words=3,
                     chunk_words=1500, model="m", temperature=0.3,
-                    min_answer_words=3, batch=False, workers=2, retries=1, limit=None, seed=0)
+                    min_answer_words=3, limit=None, seed=0)
 
 
 def stage(**kwargs):
@@ -115,22 +115,6 @@ class TestCheck:
         assert check(reply, self.TEXT, 3) == (BAD_RESPONSE, None)
 
 
-class FakeStage(InstructionGenStage):
-    """Answers each chunk with its first three words, and records the texts it was asked about."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**{**STAGE_KWARGS, **kwargs})
-        self.asked = []
-
-    def ask(self, text):
-        self.asked.append(text)
-        return {"question": "Q?", "answer_spans": [" ".join(text.split()[:3])]}
-
-    @staticmethod
-    def _make_client():
-        return None
-
-
 # Where a run given tmp_path / "out" writes: the prompt and thinking level are added to its name
 OUT = "out-multi-span-thinking-low"
 
@@ -144,7 +128,7 @@ def write_manifest(input_dir, records):
 class TestRun:
     def test_writes_pairs_responses_and_stats(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2, {"NA": 0.9, "ne": 0.9})])
-        FakeStage().run(tmp_path / "in", tmp_path / "out")
+        BatchStage(FakeBatchClient()).run(tmp_path / "in", tmp_path / "out")
         [pair] = [json.loads(l) for l in open(tmp_path / OUT / "manifest.jsonl")]
         assert (pair["id"], pair["question"], pair["answer"], pair["answer_spans"]) == \
             ("id1", "Q?", "one two three", [{"start": 0, "end": 13}])
@@ -157,20 +141,20 @@ class TestRun:
         (tmp_path / OUT).mkdir()
         with open(tmp_path / OUT / "responses.jsonl", "w") as rf:
             rf.write(json.dumps({"key": "id1#0", "outcome": NO_QUESTION, "register_labels": []}) + "\n")
-        stage_ = FakeStage()
-        stage_.run(tmp_path / "in", tmp_path / "out")
-        assert len(stage_.asked) == 1
+        client = FakeBatchClient()
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        assert [r["key"] for r in client.uploaded[0]] == ["id2#0"]
         assert len(open(tmp_path / OUT / "responses.jsonl").readlines()) == 2
 
     def test_a_limited_run_writes_to_a_limit_folder_beside_the_runs(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
-        FakeStage(limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
+        BatchStage(FakeBatchClient(), limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
         assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1-multi-span-thinking-low"]
         assert len(open(tmp_path / "instruction-gen" / "limit-1-multi-span-thinking-low" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]
-        assert FakeStage(limit=5).select(chunks_) == FakeStage(limit=5).select(chunks_)
+        assert stage(limit=5).select(chunks_) == stage(limit=5).select(chunks_)
 
 
 class TestManifest:
@@ -233,7 +217,7 @@ class FakeBatchClient:
 
 class BatchStage(InstructionGenStage):
     def __init__(self, client, **kwargs):
-        super().__init__(**{**STAGE_KWARGS, "batch": True, **kwargs})
+        super().__init__(**{**STAGE_KWARGS, **kwargs})
         self.client = client
 
     def _make_client(self):

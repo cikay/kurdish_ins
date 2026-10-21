@@ -147,14 +147,13 @@ Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the c
 average word counts of the kept questions and answers (`question_words_avg`,
 `answer_words_avg`).
 
-With `batch: true` the chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
+The chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
 as one job, at half the price of one call per chunk. The stage uploads them as
 `batch_requests.jsonl`, writes the job's name to `batch_job.json` and checks the job every
-minute until it ends (Google's target is 24 hours). It then saves the results like a run
-of single calls and deletes both files. If the stage is stopped while it waits, running it
+minute until it ends (Google's target is 24 hours). It then saves the results and
+deletes both files. If the stage is stopped while it waits, running it
 again waits for the same job rather than submitting (and paying for) a second one. Chunks
-the job failed are sent by the next run. `batch: false` sends one call per chunk,
-`workers` at a time, which is quicker for a small `limit`.
+the job failed are sent by the next run.
 
 The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
 running it with a changed prompt, move the folder of the earlier run away.

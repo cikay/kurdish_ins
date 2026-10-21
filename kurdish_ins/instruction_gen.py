@@ -11,8 +11,8 @@ A pair is kept only when every span appears verbatim in the chunk, in order and 
 overlapping, and the spans joined are long enough, so the answer is always the source's
 own Kurmanji, never the model's.
 
-With `batch` set, the chunks go to Gemini's Batch API as one job, at half the price, and
-the stage waits for it (up to 24 hours). Otherwise it sends them one call at a time.
+The chunks go to Gemini's Batch API as one job, at half the price of one call per chunk,
+and the stage waits for it (up to 24 hours).
 
 Each chunk's outcome is appended to `responses.jsonl` as soon as it comes back, so a run
 that stops is resumed by running it again: chunks already answered are skipped. A batch
@@ -26,7 +26,6 @@ import random
 import sys
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from kurdish_ins.prompts import MULTI_SPAN_PROMPT
@@ -39,8 +38,8 @@ BAD_RESPONSE = "bad_response"      # not JSON, or not the shape the prompt asks 
 SPAN_NOT_FOUND = "span_not_found"  # a span is not in the chunk verbatim, in order
 TOO_SHORT = "too_short"            # the answer has fewer than min_answer_words words
 
-# What ask() returns when every retry failed, and a batch result line holds an error. Not
-# None, which is the model's "no question".
+# The reply of a batch result line that holds an error. Not None, which is the model's
+# "no question".
 FAILED = object()
 
 # In the output folder's name, so runs with different prompts can be compared
@@ -152,7 +151,7 @@ class InstructionGenStage(Stage):
     def __init__(self, allow_any: dict[str, float], forbid_any: dict[str, float], keep_sources: list[str],
                  mt_exempt_domains: list[str],
                  min_words: int, chunk_words: int, model: str, temperature: float,
-                 min_answer_words: int, batch: bool, workers: int, retries: int, limit: int | None, seed: int,
+                 min_answer_words: int, limit: int | None, seed: int,
                  input_manifest: str | None = None):
         self._allow_any = allow_any
         self._forbid_any = forbid_any
@@ -163,9 +162,6 @@ class InstructionGenStage(Stage):
         self._model = model
         self._temperature = temperature
         self._min_answer_words = min_answer_words
-        self._batch = batch
-        self._workers = workers
-        self._retries = retries
         self._limit = limit
         self._seed = seed
         self._input_manifest = input_manifest
@@ -188,12 +184,9 @@ class InstructionGenStage(Stage):
               f"(model={self._model})")
         todo = [chunk for chunk in todo if chunk["key"] not in answered]
 
-        if self._batch and (todo or (output_dir / "batch_job.json").exists()):
+        if todo or (output_dir / "batch_job.json").exists():
             self._client = self._make_client()
             self._generate_batch(todo, output_dir)
-        elif todo:
-            self._client = self._make_client()
-            self._generate_all(todo, responses_path, output_dir / "manifest.jsonl")
 
         stats = self.stats(responses_path)
         with open(output_dir / "stats.json", "w", encoding="utf-8") as sf:
@@ -266,23 +259,6 @@ class InstructionGenStage(Stage):
         with open(responses_path, encoding="utf-8") as rf:
             return {json.loads(line)["key"] for line in rf}
 
-    def _generate_all(self, todo: list[dict], responses_path: Path, manifest_path: Path) -> None:
-        outcomes = Counter()
-        with (ThreadPoolExecutor(self._workers) as pool,
-              open(responses_path, "a", encoding="utf-8") as rf,
-              open(manifest_path, "a", encoding="utf-8") as mf):
-            futures = {pool.submit(self.ask, chunk["text"]): chunk for chunk in todo}
-            try:
-                for count, future in enumerate(as_completed(futures), 1):
-                    chunk, reply = futures[future], future.result()
-                    outcomes[self.save(chunk, reply, rf, mf)] += 1
-                    print(f"  [{count:,}/{len(todo):,}] " + ", ".join(f"{k} {n:,}" for k, n in outcomes.items()),
-                          end="\r")
-            except BaseException:
-                # Do not wait for the queued chunks: a fatal API error or Ctrl-C ends the run now
-                pool.shutdown(cancel_futures=True)
-                raise
-
     def _generate_batch(self, todo: list[dict], output_dir: Path) -> None:
         """Send the chunks as one Batch API job, wait for it and save its results.
 
@@ -324,7 +300,7 @@ class InstructionGenStage(Stage):
         return job.name
 
     def _save_results(self, job, todo: list[dict], output_dir: Path) -> None:
-        """Download a finished job's results and save each chunk's reply, as single calls do,
+        """Download a finished job's results and save each chunk's reply,
         then print the outcomes and the tokens the job used."""
         results = self._client.files.download(file=job.dest.file_name).decode("utf-8")
         by_key = {chunk["key"]: chunk for chunk in todo}
@@ -360,7 +336,7 @@ class InstructionGenStage(Stage):
             time.sleep(BATCH_POLL_SECONDS)
 
     def batch_request(self, chunk: dict) -> dict:
-        """One line of a Batch API input file: the same request ask() sends for the chunk."""
+        """One line of a Batch API input file: the request for the chunk."""
         return {
             "key": chunk["key"],
             "request": {
@@ -404,39 +380,6 @@ class InstructionGenStage(Stage):
             "register_labels": chunk["register_labels"],
             "register_scores": chunk["register_scores"],
         }
-
-    def ask(self, text: str):
-        """The parsed JSON the model returned for a chunk, or FAILED when every retry failed."""
-        from google.genai import errors, types
-
-        for attempt in range(self._retries):
-            try:
-                response = self._client.models.generate_content(
-                    model=self._model,
-                    contents=prompt(text),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=self._temperature,
-                        thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
-                    ),
-                )
-            except errors.ClientError as e:
-                # 4xx errors (bad model, bad key, ...) won't fix themselves; only retry rate limits
-                if e.code != 429:
-                    raise
-                error = "rate limited"
-            except Exception as e:
-                error = str(e)
-            else:
-                usage = response.usage_metadata
-                if usage:
-                    print(f"\n  tokens: input {usage.prompt_token_count}, output {usage.candidates_token_count}, "
-                          f"thinking {usage.thoughts_token_count}, total {usage.total_token_count}")
-                return parse_reply(response.text)
-            wait = 2 ** attempt * 5
-            print(f"\n  API error ({error}); retrying in {wait}s", file=sys.stderr)
-            time.sleep(wait)
-        return FAILED
 
     @staticmethod
     def _make_client():
