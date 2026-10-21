@@ -99,9 +99,10 @@ class InstructionGenStage(Stage):
         self._client = None
 
     def run(self, input_dir: Path | None, output_dir: Path) -> None:
-        # A sample run writes under limit-<limit>/, so it never mixes with the full run
+        # A sample run writes to data/instruction-gen/limit-<limit>/ in place of the run's
+        # folder, so it never mixes with the full run
         if self._limit:
-            output_dir = output_dir / f"limit-{self._limit}"
+            output_dir = output_dir.parent / f"limit-{self._limit}"
         output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = output_dir / "responses.jsonl"
         answered = self._answered(responses_path)

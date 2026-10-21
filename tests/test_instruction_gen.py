@@ -130,11 +130,11 @@ class TestRun:
         assert len(stage_.asked) == 1
         assert len(open(tmp_path / "out" / "responses.jsonl").readlines()) == 2
 
-    def test_a_limited_run_writes_under_limit_folder(self, tmp_path):
+    def test_a_limited_run_writes_to_a_limit_folder_beside_the_runs(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1), record(2)])
-        FakeStage(limit=1).run(tmp_path / "in", tmp_path / "out")
-        assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["limit-1"]
-        assert len(open(tmp_path / "out" / "limit-1" / "manifest.jsonl").readlines()) == 1
+        FakeStage(limit=1).run(tmp_path / "in", tmp_path / "instruction-gen" / "full")
+        assert [p.name for p in (tmp_path / "instruction-gen").iterdir()] == ["limit-1"]
+        assert len(open(tmp_path / "instruction-gen" / "limit-1" / "manifest.jsonl").readlines()) == 1
 
     def test_the_same_seed_picks_the_same_chunks(self):
         chunks_ = [{"key": str(i)} for i in range(50)]

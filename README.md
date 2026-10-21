@@ -131,8 +131,8 @@ classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.
 
 `limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
 different prompts, say) ask about the same chunks. A sample run writes its files under
-`limit-<limit>/`, e.g. `data/instruction-gen/full/limit-200/`, so it never mixes with the
-full run.
+`data/instruction-gen/limit-<limit>/`, e.g. `data/instruction-gen/limit-200/`, in place of
+the run's folder, so it never mixes with the full run.
 
 Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
 `question`, `answer`, `answer_start` (its offset in `context`), `model`,

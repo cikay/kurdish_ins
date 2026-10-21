@@ -79,8 +79,8 @@ instruction-gen:
   # Tries per chunk on a rate limit or server error before leaving it for the next run.
   retries: 3
   # Chunks sent, picked at random with `seed`: the same seed picks the same chunks for each
-  # prompt, so two sample runs can be compared. The files go under limit-<limit>/, e.g.
-  # data/instruction-gen/full/limit-200/. Set it to null for every chunk.
+  # prompt, so two sample runs can be compared. The files go to data/instruction-gen/
+  # limit-<limit>/, e.g. data/instruction-gen/limit-200/. Set it to null for every chunk.
   limit: 20
   seed: 0
 
