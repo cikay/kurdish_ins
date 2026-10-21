@@ -81,6 +81,12 @@ instruction-gen:
   # Set it to null for every chunk.
   limit: 20
   seed: 0
+  # Chunks per Batch API job. One job must fit in the account's quota of tokens waiting in
+  # batch jobs: 3M for gemini-3.8-flash at Tier 1. A job of 600 chunks took 1.52M-1.63M
+  # input tokens in the first full run (26 jobs), and Google let up to 3 of them wait at
+  # once. A full run of about 37,600 chunks is 63 jobs, sent as the quota frees up. Smaller
+  # jobs also lose less when one fails or expires (after 48 hours), which returns nothing.
+  batch_chunks: 600
 
 # Where each stage runs on Modal (modal_app/app.py). pipeline.py does not read this.
 modal:

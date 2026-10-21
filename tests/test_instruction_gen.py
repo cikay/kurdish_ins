@@ -12,7 +12,7 @@ from kurdish_ins.instruction_gen import (BAD_RESPONSE, FAILED, KEPT, NO_QUESTION
 STAGE_KWARGS = dict(allow_any={"IN": 0.5, "HI": 0.5}, forbid_any={"MT": 0.2, "NA": 0.5},
                     keep_sources=["theses"], mt_exempt_domains=["wiki.org"], min_words=3,
                     chunk_words=1500, model="m", temperature=0.3,
-                    min_answer_words=3, limit=None, seed=0)
+                    min_answer_words=3, limit=None, seed=0, batch_chunks=10)
 
 
 def stage(**kwargs):
@@ -196,32 +196,54 @@ class TestBatchReply:
         assert batch_reply({"key": "k", "error": {"code": 500}}) == (FAILED, {})
 
 
+class QuotaFull(Exception):
+    code = 429
+
+
 class FakeBatchClient:
     """A Batch API that answers each request with the first three words of its passage, or
-    with an error for the keys in `errors`."""
+    with an error for the keys in `errors`. Job n is batches/n, made from the n-th upload;
+    the jobs in `expired` end JOB_STATE_EXPIRED. Every job has ended the first time it is
+    checked. With `quota`, a job is refused with 429 while that many have not ended."""
 
-    def __init__(self, errors=()):
+    def __init__(self, errors=(), expired=(), quota=None):
         self.errors = set(errors)
+        self.expired = set(expired)
+        self.quota = quota
         self.uploaded = []
         self.created = 0
-        self.files = SimpleNamespace(upload=self.upload, download=self.download)
+        self.active = set()
+        self.most_active = 0
+        self.deleted = []
+        self.files = SimpleNamespace(upload=self.upload, download=self.download, delete=self.delete)
         self.batches = SimpleNamespace(create=self.create, get=self.get)
 
     def upload(self, file, config):
         self.uploaded.append([json.loads(line) for line in open(file, encoding="utf-8")])
-        return SimpleNamespace(name="files/in")
+        return SimpleNamespace(name=f"files/in-{len(self.uploaded)}")
 
     def create(self, model, src, config):
+        if self.quota is not None and len(self.active) >= self.quota:
+            raise QuotaFull()
         self.created += 1
-        return SimpleNamespace(name="batches/1")
+        name = f"batches/{src.removeprefix('files/in-')}"
+        self.active.add(name)
+        self.most_active = max(self.most_active, len(self.active))
+        return SimpleNamespace(name=name)
+
+    def delete(self, name):
+        self.deleted.append(name)
 
     def get(self, name):
-        return SimpleNamespace(name=name, state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
-                               dest=SimpleNamespace(file_name="files/out"), error=None)
+        self.active.discard(name)
+        n = name.removeprefix("batches/")
+        state = "JOB_STATE_EXPIRED" if name in self.expired else "JOB_STATE_SUCCEEDED"
+        return SimpleNamespace(name=name, state=SimpleNamespace(name=state),
+                               dest=SimpleNamespace(file_name=f"files/out-{n}"), error=None)
 
     def download(self, file):
         lines = []
-        for request in self.uploaded[-1]:
+        for request in self.uploaded[int(file.removeprefix("files/out-")) - 1]:
             if request["key"] in self.errors:
                 lines.append({"key": request["key"], "error": {"code": 500}})
                 continue
@@ -274,13 +296,58 @@ class TestBatch:
     def test_a_job_of_an_earlier_run_is_waited_for_not_submitted_again(self, tmp_path):
         write_manifest(tmp_path / "in", [record(1)])
         (tmp_path / OUT).mkdir()
-        (tmp_path / OUT / "batch_job.json").write_text(json.dumps({"name": "batches/1", "chunks": 1}))
+        (tmp_path / OUT / "batch_job.json").write_text(json.dumps({"jobs": {"batches/1": ["id1#0"]}}))
         client = FakeBatchClient()
         client.uploaded.append([BatchStage(client).batch_request(
             {"key": "id1#0", "text": "one two three four five"})])
         BatchStage(client).run(tmp_path / "in", tmp_path / "out")
         assert client.created == 0
         assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 1
+
+    def test_the_chunks_are_split_into_jobs_of_batch_chunks(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(i) for i in range(5)])
+        client = FakeBatchClient()
+        BatchStage(client, batch_chunks=2).run(tmp_path / "in", tmp_path / "out")
+        assert [len(requests) for requests in client.uploaded] == [2, 2, 1]
+        assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 5
+
+    def test_a_resumed_run_sends_only_the_chunks_no_waiting_job_holds(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1), record(2)])
+        (tmp_path / OUT).mkdir()
+        (tmp_path / OUT / "batch_job.json").write_text(json.dumps({"jobs": {"batches/1": ["id1#0"]}}))
+        client = FakeBatchClient()
+        client.uploaded.append([BatchStage(client).batch_request(
+            {"key": "id1#0", "text": "one two three four five"})])
+        BatchStage(client).run(tmp_path / "in", tmp_path / "out")
+        assert [r["key"] for r in client.uploaded[1]] == ["id2#0"]
+        assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 2
+
+    def test_a_full_quota_holds_jobs_back_until_others_end(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(i) for i in range(5)])
+        client = FakeBatchClient(quota=2)
+        BatchStage(client, batch_chunks=1).run(tmp_path / "in", tmp_path / "out")
+        assert (client.created, client.most_active) == (5, 2)
+        assert client.deleted  # the uploads of the refused jobs
+        assert len(open(tmp_path / OUT / "manifest.jsonl").readlines()) == 5
+        assert not (tmp_path / OUT / "batch_job.json").exists()
+
+    def test_a_job_over_the_quota_on_its_own_stops_the_run(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(1)])
+        with pytest.raises(SystemExit, match="Lower batch_chunks"):
+            BatchStage(FakeBatchClient(quota=0)).run(tmp_path / "in", tmp_path / "out")
+
+    def test_an_expired_job_loses_only_its_own_chunks(self, tmp_path):
+        write_manifest(tmp_path / "in", [record(i) for i in range(4)])
+        client = FakeBatchClient(expired={"batches/1"})
+        with pytest.raises(SystemExit, match="batches/1 ended JOB_STATE_EXPIRED"):
+            BatchStage(client, batch_chunks=2).run(tmp_path / "in", tmp_path / "out")
+        expired_keys = [r["key"] for r in client.uploaded[0]]
+        saved = {json.loads(l)["key"] for l in open(tmp_path / OUT / "responses.jsonl")}
+        assert saved == {r["key"] for r in client.uploaded[1]}
+        assert not (tmp_path / OUT / "batch_job.json").exists()
+        client = FakeBatchClient()
+        BatchStage(client, batch_chunks=2).run(tmp_path / "in", tmp_path / "out")
+        assert [r["key"] for r in client.uploaded[0]] == expired_keys
 
 
 class TestWait:
@@ -292,5 +359,5 @@ class TestWait:
         monkeypatch.setattr("kurdish_ins.instruction_gen.time.sleep", waits.append)
         stage_ = stage()
         stage_._client = client
-        assert stage_._wait("batches/1").state.name == "JOB_STATE_SUCCEEDED"
+        assert [job.state.name for job in stage_._wait(["batches/1"])] == ["JOB_STATE_SUCCEEDED"]
         assert waits == [10, 20, 40, 80, 160, 320, 600, 600, 600]

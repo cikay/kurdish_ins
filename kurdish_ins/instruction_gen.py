@@ -11,15 +11,19 @@ A pair is kept only when every span appears verbatim in the chunk, in order and 
 overlapping, and the spans joined are long enough, so the answer is always the source's
 own Kurmanji, never the model's.
 
-The chunks go to Gemini's Batch API as one job, at half the price of one call per chunk,
-and the stage waits for it (up to 24 hours).
+The chunks go to Gemini's Batch API, at half the price of one call per chunk, in jobs of
+`batch_chunks` chunks each. Jobs are submitted until the account's quota of tokens waiting
+in batch jobs is full (Google answers 429), then one more each time a job ends. Each job's
+results are saved as soon as it ends, so a job that fails or expires (after 48 hours, with
+no results at all) costs only its own chunks, which the next run sends again.
 
 Each chunk's outcome and the tokens it used are appended to `responses.jsonl` as soon as
 it comes back, and `stats.json` adds the tokens up, so runs with different models or
 thinking levels can be compared on cost as well as on their pairs. A run
-that stops is resumed by running it again: chunks already answered are skipped. A batch
-job's name is kept in `batch_job.json` until its results are saved, so a run stopped while
-waiting waits for the same job again rather than paying for a second one.
+that stops is resumed by running it again: chunks already answered are skipped. The batch
+jobs not yet saved, and the keys of their chunks, are kept in `batch_job.json`, so a run
+stopped while waiting waits for the same jobs again rather than paying for them twice, and
+sends only the chunks none of them holds.
 """
 
 import json
@@ -58,6 +62,9 @@ THINKING_LEVEL = "LOW"
 # to BATCH_POLL_MAX_SECONDS: a small job is seen soon, and a long one is not checked often
 BATCH_POLL_FIRST_SECONDS = 10
 BATCH_POLL_MAX_SECONDS = 600
+# The HTTP status Google answers a new batch job with when the tokens already waiting in
+# batch jobs fill the account's quota (3M for gemini-3.8-flash at Tier 1)
+QUOTA_FULL = 429
 BATCH_DONE_STATES = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"}
 
 
@@ -164,7 +171,7 @@ class InstructionGenStage(Stage):
     def __init__(self, allow_any: dict[str, float], forbid_any: dict[str, float], keep_sources: list[str],
                  mt_exempt_domains: list[str],
                  min_words: int, chunk_words: int, model: str, temperature: float,
-                 min_answer_words: int, limit: int | None, seed: int,
+                 min_answer_words: int, limit: int | None, seed: int, batch_chunks: int,
                  input_manifest: str | None = None):
         self._allow_any = allow_any
         self._forbid_any = forbid_any
@@ -177,6 +184,7 @@ class InstructionGenStage(Stage):
         self._min_answer_words = min_answer_words
         self._limit = limit
         self._seed = seed
+        self._batch_chunks = batch_chunks
         self._input_manifest = input_manifest
         self._client = None
 
@@ -273,43 +281,105 @@ class InstructionGenStage(Stage):
             return {json.loads(line)["key"] for line in rf}
 
     def _generate_batch(self, todo: list[dict], output_dir: Path) -> None:
-        """Send the chunks as one Batch API job, wait for it and save its results.
+        """Send the chunks as Batch API jobs of `batch_chunks` each, as many at a time as the
+        quota allows, and save each job's results as soon as it ends.
 
-        A job submitted by an earlier run, named in `batch_job.json`, is waited for instead
-        of submitting a new one. Its results are matched to the chunks by key; chunks it
-        failed, or did not include, are sent by the next run.
+        `batch_job.json` holds the jobs not yet saved and their chunks' keys. Jobs an earlier
+        run left there are waited for, and their chunks are not sent again. Results are
+        matched to the chunks by key; chunks a job failed, and the chunks of a job that
+        failed or expired, are sent by the next run.
         """
-        job_path = output_dir / "batch_job.json"
-        requests_path = output_dir / "batch_requests.jsonl"
-        if job_path.exists():
-            name = json.loads(job_path.read_text(encoding="utf-8"))["name"]
-            print(f"Waiting for {name}, submitted by an earlier run")
-        else:
-            name = self._submit(todo, requests_path, display_name=f"instruction-gen-{output_dir.name}")
-            job_path.write_text(json.dumps({"name": name, "chunks": len(todo)}), encoding="utf-8")
-            print(f"Submitted {name} with {len(todo):,} chunks. If this run is stopped, running it "
-                  f"again waits for the same job.")
+        job_file = output_dir / "batch_job.json"
+        submitted_jobs = self._read_submitted_jobs(job_file)
+        if submitted_jobs:
+            print(f"Waiting for {len(submitted_jobs)} jobs submitted by an earlier run")
+        unsent_jobs = self._split_into_jobs(todo, submitted_jobs)
 
-        job = self._wait(name)
-        if job.state.name != "JOB_STATE_SUCCEEDED":
-            job_path.unlink()
-            sys.exit(f"{name} ended {job.state.name} ({job.error}). Run again to submit the chunks again.")
+        failures = []
+        while unsent_jobs or submitted_jobs:
+            self._submit_while_quota_allows(unsent_jobs, submitted_jobs, output_dir, job_file)
+            failures += self._save_ended_jobs(submitted_jobs, todo, output_dir, job_file)
 
-        self._save_results(job, todo, output_dir)
-        # Only now: a run stopped while saving downloads the same results again
-        job_path.unlink()
-        requests_path.unlink(missing_ok=True)
+        job_file.unlink()
+        (output_dir / "batch_requests.jsonl").unlink(missing_ok=True)
+        if failures:
+            sys.exit("\n".join(failures) + "\nRun again to submit their chunks again.")
 
-    def _submit(self, todo: list[dict], requests_path: Path, display_name: str) -> str:
+    @staticmethod
+    def _read_submitted_jobs(job_file: Path) -> dict[str, list[str]]:
+        """The jobs an earlier run submitted and did not save: each job's name and its chunks'
+        keys. Empty when there is no `batch_job.json`."""
+        if not job_file.exists():
+            return {}
+        return json.loads(job_file.read_text(encoding="utf-8"))["jobs"]
+
+    @staticmethod
+    def _write_submitted_jobs(job_file: Path, submitted_jobs: dict[str, list[str]]) -> None:
+        job_file.write_text(json.dumps({"jobs": submitted_jobs}), encoding="utf-8")
+
+    def _split_into_jobs(self, todo: list[dict], submitted_jobs: dict[str, list[str]]) -> list[tuple[int, list[dict]]]:
+        """The chunks no submitted job holds, cut into jobs of `batch_chunks`, each with its
+        number for the job's display name. Numbers follow the earlier run's jobs."""
+        keys_in_jobs = {key for keys in submitted_jobs.values() for key in keys}
+        unsent = [chunk for chunk in todo if chunk["key"] not in keys_in_jobs]
+        jobs = [unsent[start:start + self._batch_chunks] for start in range(0, len(unsent), self._batch_chunks)]
+        print(f"{len(unsent):,} chunks to send in {len(jobs)} jobs of up to {self._batch_chunks:,}")
+        return list(enumerate(jobs, start=len(submitted_jobs) + 1))
+
+    def _submit_while_quota_allows(self, unsent_jobs: list[tuple[int, list[dict]]],
+                                   submitted_jobs: dict[str, list[str]], output_dir: Path,
+                                   job_file: Path) -> None:
+        """Submit the unsent jobs in order until there are none or Google refuses one because
+        the quota is full; a refused job stays first in `unsent_jobs`. Moves each submitted
+        job into `submitted_jobs` and `batch_job.json`."""
+        while unsent_jobs:
+            job_number, chunks = unsent_jobs[0]
+            name = self._submit(chunks, output_dir / "batch_requests.jsonl",
+                                display_name=f"instruction-gen-{output_dir.name}-{job_number}")
+            if name is None:
+                if not submitted_jobs:
+                    sys.exit(f"A job of {len(chunks):,} chunks is over the account's batch quota "
+                             f"on its own. Lower batch_chunks in config.yml.")
+                return
+            unsent_jobs.pop(0)
+            submitted_jobs[name] = [chunk["key"] for chunk in chunks]
+            self._write_submitted_jobs(job_file, submitted_jobs)
+            print(f"  submitted {name} ({len(chunks):,} chunks, {len(unsent_jobs)} jobs left to send)")
+
+    def _save_ended_jobs(self, submitted_jobs: dict[str, list[str]], todo: list[dict], output_dir: Path,
+                         job_file: Path) -> list[str]:
+        """Wait until at least one submitted job ends, save the results of those that
+        succeeded and take every ended job out of `submitted_jobs` and `batch_job.json`.
+        Returns a message for each job that failed or expired."""
+        failures = []
+        for job in self._wait(list(submitted_jobs)):
+            if job.state.name == "JOB_STATE_SUCCEEDED":
+                self._save_results(job, todo, output_dir)
+            else:
+                failures.append(f"{job.name} ended {job.state.name} ({job.error})")
+            del submitted_jobs[job.name]
+            # Only now: a run stopped while saving downloads the same results again
+            self._write_submitted_jobs(job_file, submitted_jobs)
+        return failures
+
+    def _submit(self, chunks: list[dict], requests_path: Path, display_name: str) -> str | None:
         """Write the chunks' requests to `requests_path`, upload it and create a batch job
-        from it. Returns the job's name."""
+        from it. Returns the job's name, or None when the batch quota is full (429), after
+        deleting the upload."""
         with open(requests_path, "w", encoding="utf-8") as f:
-            for chunk in todo:
+            for chunk in chunks:
                 f.write(json.dumps(self.batch_request(chunk), ensure_ascii=False) + "\n")
         uploaded = self._client.files.upload(file=str(requests_path),
                                              config={"display_name": display_name, "mime_type": "jsonl"})
-        job = self._client.batches.create(model=self._model, src=uploaded.name,
-                                          config={"display_name": display_name})
+        try:
+            job = self._client.batches.create(model=self._model, src=uploaded.name,
+                                              config={"display_name": display_name})
+        # google.genai's APIError carries the HTTP status as `code`
+        except Exception as error:
+            if getattr(error, "code", None) != QUOTA_FULL:
+                raise
+            self._client.files.delete(name=uploaded.name)
+            return None
         return job.name
 
     def _save_results(self, job, todo: list[dict], output_dir: Path) -> None:
@@ -335,18 +405,21 @@ class InstructionGenStage(Stage):
         print(f"  {job.name}: " + ", ".join(f"{k} {n:,}" for k, n in outcomes.items()))
         print(f"  tokens: input {tokens['input']:,}, output {tokens['output']:,}, thinking {tokens['thinking']:,}")
 
-    def _wait(self, name: str):
-        """The batch job once it has ended. The wait between checks doubles from
-        BATCH_POLL_FIRST_SECONDS up to BATCH_POLL_MAX_SECONDS."""
+    def _wait(self, names: list[str]) -> list:
+        """The batch jobs of `names` that have ended, once at least one has. The wait between
+        checks doubles from BATCH_POLL_FIRST_SECONDS up to BATCH_POLL_MAX_SECONDS."""
         started = time.monotonic()
         wait = BATCH_POLL_FIRST_SECONDS
         while True:
-            job = self._client.batches.get(name=name)
-            if job.state.name in BATCH_DONE_STATES:
+            jobs = [self._client.batches.get(name=name) for name in names]
+            ended = [job for job in jobs if job.state.name in BATCH_DONE_STATES]
+            if ended:
                 print()
-                return job
+                return ended
             minutes = (time.monotonic() - started) / 60
-            print(f"  {job.state.name} ({minutes:.0f} min, next check in {wait // 60}m{wait % 60:02d}s)",
+            states = Counter(job.state.name for job in jobs)
+            print(f"  {', '.join(f'{state} {n}' for state, n in states.items())} "
+                  f"({minutes:.0f} min, next check in {wait // 60}m{wait % 60:02d}s)",
                   end="\r", flush=True)
             time.sleep(wait)
             wait = min(wait * 2, BATCH_POLL_MAX_SECONDS)

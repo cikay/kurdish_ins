@@ -152,13 +152,20 @@ apart to show what the thinking level costs. Rows saved before tokens were recor
 none and are left out of `tokens_avg`.
 
 The chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
-as one job, at half the price of one call per chunk. The stage uploads them as
-`batch_requests.jsonl`, writes the job's name to `batch_job.json` and checks the job until
-it ends (Google's target is 24 hours): after 10 seconds, then twice as long after each
-check, up to every 10 minutes. It then saves the results and
-deletes both files. If the stage is stopped while it waits, running it
-again waits for the same job rather than submitting (and paying for) a second one. Chunks
-the job failed are sent by the next run.
+at half the price of one call per chunk, in jobs of `batch_chunks` chunks each. Google
+caps the tokens waiting in batch jobs per model (3M for gemini-3.8-flash at Tier 1), so a
+job must fit in it on its own. The stage submits jobs until Google answers 429 (quota
+full), then one more each time a job ends. A job that fails or expires (Google expires a
+job after 48 hours and returns none of its results) costs only its own chunks. The stage
+uploads each job's chunks as `batch_requests.jsonl`, writes the jobs' names and their
+chunks' keys to `batch_job.json` and checks them until they end (Google's target is 24
+hours): after 10 seconds, then twice as long after each check, up to every 10 minutes. It
+saves each job's results as soon as that job ends and takes it out of `batch_job.json`,
+which is deleted once every job is saved. If
+the stage is stopped while it waits, running it again waits for the same jobs rather than
+submitting (and paying for) them again, and sends only the chunks none of them holds.
+Chunks a job failed, and the chunks of a job that failed or expired, are sent by the next
+run.
 
 The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
 running it with a changed prompt, move the folder of the earlier run away.
