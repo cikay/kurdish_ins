@@ -394,6 +394,10 @@ class InstructionGenStage(Stage):
             except Exception as e:
                 error = str(e)
             else:
+                usage = response.usage_metadata
+                if usage:
+                    print(f"\n  tokens: input {usage.prompt_token_count}, output {usage.candidates_token_count}, "
+                          f"thinking {usage.thoughts_token_count}, total {usage.total_token_count}")
                 return parse_reply(response.text)
             wait = 2 ** attempt * 5
             print(f"\n  API error ({error}); retrying in {wait}s", file=sys.stderr)
