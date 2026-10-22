@@ -4,7 +4,8 @@ Instruction-tuning data for Kurmanji Kurdish, built from the Kurmanji (`kmr_Latn
 of [FineWeb2](https://huggingface.co/datasets/HuggingFaceFW/fineweb-2) and
 [kurdish-theses-yok](https://huggingface.co/datasets/muzaffercky/kurdish-theses-yok).
 
-The pipeline is built one stage at a time. So far it has one stage, `classify`.
+The pipeline is built one stage at a time. So far it has two stages, `classify` and
+`instruction-gen`.
 
 ## Installation
 
@@ -12,7 +13,7 @@ The pipeline is built one stage at a time. So far it has one stage, `classify`.
 pipenv install --dev
 ```
 
-Later stages call Gemini, so they will need `GEMINI_API_KEY` in `.env`. `classify` does not.
+`instruction-gen` calls Gemini, so it needs `GEMINI_API_KEY` in `.env`. `classify` does not.
 
 ## Usage
 
@@ -75,6 +76,7 @@ data/classify/sample/manifest.jsonl
 | Stage      | Reads                          | Writes                               |
 |------------|--------------------------------|--------------------------------------|
 | `classify` | `sources`, or `input_file`     | `data/classify/<run>/manifest.jsonl` |
+| `instruction-gen` | `data/classify/<run>/manifest.jsonl` | `data/instruction-gen/<run>/manifest.jsonl` |
 
 ### classify
 
@@ -111,28 +113,62 @@ Settings in `config.yml`:
 Kurmanji is not one of the classifier's training languages. On a small test set it still
 labelled Wikipedia articles `IN`/`en` and news sites `NA`/`ne`.
 
-## How the datasets are read
+### instruction-gen
 
-`kurdish_ins/hub.py` downloads a source's parquet files into the Hugging Face cache and
-reads them locally. FineWeb2's `kmr_Latn` is a single 562 MB file, the theses' one 65 MB
-file, and each is downloaded once.
+Asks Gemini for one question per chosen entry, answered by one or more spans copied from the
+entry (the prompt is in `kurdish_ins/prompts.py`). It keeps a pair only when every span
+appears verbatim in the entry, in order and without overlapping, and joins the spans in
+that order into the answer: by a blank line where a line break was skipped, by a space
+where other text was. The answer is therefore always the source's own Kurmanji.
 
-It does not use `load_dataset(..., streaming=True)`, because a stream that is not read to
-the end hangs the process at exit. pyarrow reads the next chunk over HTTP on one of its own
-threads. Python kills that thread in the middle of the request when it shuts down, and
-arrow's thread pool then waits for the thread forever. Closing the stream or turning off
-pre-buffering does not cancel a read that has already started. A local file leaves no read
-in flight.
+It uses an entry when any label of `allow_any` scores above its threshold and no label of
+`forbid_any` does, and every entry of `keep_sources` whatever its scores. Entries of
+`mt_exempt_domains` (Kurdish Wikipedia, Wiktionary and kurdipedia) skip the `MT` check
+only, since the classifier gives many Wikipedia articles a moderate `MT` score. The thresholds
+are per label and read the scores classify wrote, so changing one needs no new classify run. An entry longer than `chunk_words` is cut at line
+breaks, and each chunk gets its own question.
 
-## Adding a stage
+It reads `input_manifest` when that is set, e.g. `data/modal/full/manifest.jsonl` for a
+classify run downloaded from Modal, and otherwise `data/classify/<run>/manifest.jsonl`.
 
-1. Write a `Stage` subclass in `kurdish_ins/` with a `name` and
-   `run(input_dir, output_dir)`. Read `input_dir / "manifest.jsonl"` and write
-   `output_dir / "manifest.jsonl"`.
-2. Register it in `REGISTRY` in `pipeline.py`.
-3. Add its name to `stages` in `config.yml`, plus a section with a `description` and its
-   settings. Every setting is passed to the stage's constructor as a keyword argument.
-   Stages define no defaults in Python, so all settings live in `config.yml`.
+`limit` sends only that many chunks, picked at random with `seed`, so two sample runs (with
+different prompts or models, say) ask about the same chunks. A sample run writes its files under
+`data/instruction-gen/limit-<limit>-<model>-<prompt>-thinking-<level>/`, e.g.
+`data/instruction-gen/limit-200-gemini-3.8-flash-multi-span-thinking-low/`, in place of the
+run's folder, so it never mixes with the full run. A full run writes to
+`data/instruction-gen/<run>-<model>-<prompt>-thinking-<level>/`. The model is `model` in
+`config.yml`; the prompt and thinking level are the stage's `PROMPT_NAME` and
+`THINKING_LEVEL`. So runs with different ones can be compared.
+
+Each manifest row has `source`, `id`, `url`, `domain`, `chunk`, `context` (the chunk),
+`question`, `answer`, `answer_spans` (each span's `start` and `end` in `context`), `model`,
+`register_labels` and `register_scores`. Every chunk's outcome (`kept`, `no_question`,
+`span_not_found`, `too_short` or `bad_response`), the model's reply and the tokens it used
+(`tokens`: `input`, `output` and `thinking`) go to `responses.jsonl`. Their counts, in total
+and per label set, go to `stats.json`, with the average word counts of the kept questions
+and answers (`question_words_avg`, `answer_words_avg`) and the tokens in total (`tokens`)
+and per chunk (`tokens_avg`). Gemini bills thinking tokens as output; they are counted
+apart to show what the thinking level costs. Rows saved before tokens were recorded have
+none and are left out of `tokens_avg`.
+
+The chunks go to Gemini's [Batch API](https://ai.google.dev/gemini-api/docs/batch-api)
+at half the price of one call per chunk, in jobs of `batch_chunks` chunks each. Google
+caps the tokens waiting in batch jobs per model (3M for gemini-3.8-flash at Tier 1), so a
+job must fit in it on its own. The stage submits jobs until Google answers 429 (quota
+full), then one more each time a job ends. A job that fails or expires (Google expires a
+job after 48 hours and returns none of its results) costs only its own chunks. The stage
+uploads each job's chunks as `batch_requests.jsonl`, writes the jobs' names and their
+chunks' keys to `batch_job.json` and checks them until they end (Google's target is 24
+hours): after 10 seconds, then twice as long after each check, up to every 10 minutes. It
+saves each job's results as soon as that job ends and takes it out of `batch_job.json`,
+which is deleted once every job is saved. If
+the stage is stopped while it waits, running it again waits for the same jobs rather than
+submitting (and paying for) them again, and sends only the chunks none of them holds.
+Chunks a job failed, and the chunks of a job that failed or expired, are sent by the next
+run.
+
+The stage resumes: running it again skips the chunks in `responses.jsonl`. So before
+running it with a changed prompt, move the folder of the earlier run away.
 
 ## Scripts
 
@@ -144,31 +180,49 @@ python -m scripts.sample_fineweb   # 200 entries over 300 words, at most 3 per d
 
 Options: `--total`, `--per-domain`, `--min-words` and `--output`.
 
+```bash
+python -m scripts.count_filter     # entries, words and chunks instruction-gen's filter keeps, without calling Gemini
+```
+
+`--save before.json`, then edit `allow_any` or `forbid_any` and run it with
+`--compare before.json` to see what the change does.
+
+```bash
+python -m scripts.push_hf data/instruction-gen/<folder>/manifest.jsonl --dataset user/name --dry-run
+```
+
+Asks [GlotLID](https://huggingface.co/cis-lmu/glotlid) the language of every question and
+answer, prints how many are not `kmr_Latn` and what they are instead, and pushes every pair
+(`instruction` for the question, `output` for the answer, `context`, `id`, `domain`,
+`source`, `url`) as the `kmr_latn` subset of `--dataset`, created private. It drops the
+pairs whose answer or context has a phone number or an email address (82 on the first full
+run), since FineWeb hides only emails and the theses end with their authors' contact
+details. The token is `HF_TOKEN` in `.env`; one set in the shell is ignored. Nothing is
+dropped on GlotLID's say: on the first full run it called 764 of 33,073 questions
+`kiu_Latn`, and the ones read were plain Kurmanji. `--dry-run` prints the counts and pushes
+nothing.
+
 ## Tests
 
 ```bash
 pipenv run pytest
 ```
 
-The tests never load the classifier model or download a dataset. They pass a fake
-classifier to `ClassifyStage.classify`.
-
 ## Layout
 
 ```
 pipeline.py            runs the stages listed in config.yml
 config.yml             stage order and every stage setting
+s5.jsonl               a 5-entry sample for classify.input_file
 kurdish_ins/
   stage.py             Stage base class, stage_config, run_name, load_manifest
   classify.py          classify stage
   register_classifier.py  the register model and its labels
+  instruction_gen.py   instruction-gen stage
+  prompts.py           the prompts instruction-gen sends to Gemini
   hub.py               reads a dataset from local parquet files
   logs.py              logging setup
 modal_app/app.py       runs stages on Modal
 scripts/               standalone tools
 tests/
 ```
-
-The files at the root other than `pipeline.py` (`generate_pairs.py`,
-`prepare_register_data.py`, `test_register_classifier.py`, `compare_lengths.py`) are from
-before the pipeline. They will be replaced by stages.

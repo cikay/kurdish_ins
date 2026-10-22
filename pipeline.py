@@ -7,10 +7,12 @@ import yaml
 
 from kurdish_ins import logs
 from kurdish_ins.classify import ClassifyStage
+from kurdish_ins.instruction_gen import InstructionGenStage
 from kurdish_ins.stage import Stage, run_name, stage_config
 
 REGISTRY: dict[str, type[Stage]] = {
     "classify": ClassifyStage,
+    "instruction-gen": InstructionGenStage,
 }
 
 
