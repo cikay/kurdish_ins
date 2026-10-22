@@ -10,6 +10,11 @@ the `kmr_latn` subset of a private dataset: on the first full run GlotLID called
 33,073 questions kiu_Latn, and the ones read were plain Kurmanji, so its count is printed
 but nothing is dropped on it.
 
+A pair is dropped when its answer or context has a phone number or an email address,
+other than the placeholders FineWeb puts in place of emails. On the first full run that
+was 82 pairs: contact lines of publishers and offices, mobiles in notices, and the
+contact pages at the end of theses, some with the author's birth date and place.
+
 Run it with --dry-run first to see the counts without pushing.
 
 The Hugging Face token is HF_TOKEN in .env, so it never lands in the shell's history. It
@@ -23,6 +28,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 
@@ -42,6 +48,24 @@ COLUMNS = {"question": "instruction", "answer": "output", "context": "context", 
 
 # The dataset is created private, to be looked over on the Hub before it is made public
 PRIVATE = True
+
+# Words that come before a phone number, in Kurmanji, Turkish and English
+PHONE_WORDS = r"(?:tel|telefon|telefûn|telîfon|tlf|phone|mobile|mobîl|whatsapp|faks|fax|gsm|hejmara telefon\w*|pêwendî|têkilî)"
+# A phone number after one of PHONE_WORDS; one with a country code (+ or 00); and a
+# Turkish or Iraqi number written with its leading 0, which often stands alone
+PHONE_PATTERNS = [
+    re.compile(PHONE_WORDS + r"\W{0,6}((?:\+|00)?\(?\d[\d ()-]{6,20}\d)", re.IGNORECASE),
+    re.compile(r"(?<![\w./-])((?:\+|00)\d{1,3}[ (-]*\d[\d ()-]{6,18}\d)(?![\w/.-])"),
+    re.compile(r"(?<![\w./-])(0[1-9]\d{2}[ -]?\d{3}[ -]?\d{2}[ -]?\d{2}|07\d{9}|05\d{9})(?![\w/.-])"),
+]
+# A phone number has 7 to 15 digits (E.164 allows 15); fewer is a year or a page range
+PHONE_DIGITS = range(7, 16)
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# FineWeb's anonymiser puts these in place of the emails it finds
+EMAIL_PLACEHOLDER_DOMAINS = ("example.org", "example.com")
+# The fields searched for phone numbers and emails; the answer is a copy of context spans,
+# but both are searched so the check does not depend on that
+CONTACT_FIELDS = ("answer", "context")
 
 # The other languages printed for questions and answers that are not LANGUAGE
 TOP_OTHER_LANGUAGES = 10
@@ -98,6 +122,27 @@ def count_languages(pairs: list[dict], model) -> dict:
     return counts
 
 
+def has_phone(text: str) -> bool:
+    for pattern in PHONE_PATTERNS:
+        for match in pattern.finditer(text):
+            # An ISBN without hyphens looks like a phone number written with its leading 0
+            if re.search(r"ISBN\W*$", text[max(0, match.start() - 8):match.start()]):
+                continue
+            if len(re.sub(r"\D", "", match.group(1))) in PHONE_DIGITS:
+                return True
+    return False
+
+
+def has_email(text: str) -> bool:
+    return any(not email.rstrip(".").endswith(EMAIL_PLACEHOLDER_DOMAINS) for email in EMAIL.findall(text))
+
+
+def drop_contacts(pairs: list[dict]) -> list[dict]:
+    """The pairs with no phone number or email address in CONTACT_FIELDS."""
+    return [pair for pair in pairs
+            if not any(has_phone(pair[field]) or has_email(pair[field]) for field in CONTACT_FIELDS)]
+
+
 def report(counts: dict) -> str:
     lines = [f"pairs                     {counts['pairs']:,}",
              f"question not {LANGUAGE}     {counts['question_not']:,}",
@@ -127,6 +172,10 @@ def main():
     print(f"Read {len(pairs):,} pairs from {args.manifest}")
 
     print(report(count_languages(pairs, load_glotlid())))
+
+    kept = drop_contacts(pairs)
+    print(f"dropped for a phone number or email address  {len(pairs) - len(kept):,}")
+    pairs = kept
 
     if args.dry_run:
         print("\nDry run: nothing pushed")

@@ -194,10 +194,13 @@ python -m scripts.push_hf data/instruction-gen/<folder>/manifest.jsonl --dataset
 Asks [GlotLID](https://huggingface.co/cis-lmu/glotlid) the language of every question and
 answer, prints how many are not `kmr_Latn` and what they are instead, and pushes every pair
 (`instruction` for the question, `output` for the answer, `context`, `id`, `domain`,
-`source`, `url`) as the `kmr_latn` subset of `--dataset`, created private. The token is
-`HF_TOKEN` in `.env`; one set in the shell is ignored. Nothing is dropped on GlotLID's
-say: on the first full run it called 764 of 33,073 questions `kiu_Latn`, and the ones read
-were plain Kurmanji. `--dry-run` prints the counts and pushes nothing.
+`source`, `url`) as the `kmr_latn` subset of `--dataset`, created private. It drops the
+pairs whose answer or context has a phone number or an email address (82 on the first full
+run), since FineWeb hides only emails and the theses end with their authors' contact
+details. The token is `HF_TOKEN` in `.env`; one set in the shell is ignored. Nothing is
+dropped on GlotLID's say: on the first full run it called 764 of 33,073 questions
+`kiu_Latn`, and the ones read were plain Kurmanji. `--dry-run` prints the counts and pushes
+nothing.
 
 ## Tests
 
