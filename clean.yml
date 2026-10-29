@@ -1,0 +1,55 @@
+# Settings of scripts/clean.py, which is not a pipeline stage. It cleans the pairs push_hf
+# put on the Hub and writes them as a subset of their own, so the published pairs stay as
+# they are.
+
+# The pairs to clean: the subset push_hf wrote
+dataset: muzaffercky/kurdish-ins
+subset: kmr_latn
+# The subset the cleaned pairs are written as, and pushed as with --push
+output_subset: kmr_Latn_clean
+# Garbled text whose correct form is certain, replaced in the question, the answer and the
+# context alike, so every answer is still a verbatim copy of its context. Counts are from
+# the first full run (32,991 pairs).
+replacements:
+  # Turkish ş read in the wrong code page (cp1254 as cp1252), on FineWeb2 pages: piþtî
+  'þ': 'ş'
+  'Þ': 'Ş'
+  # UTF-8 decoded twice: baÅŸ
+  'ÅŸ': 'ş'
+  'ÄŸ': 'ğ'
+  # Romanian ș and Cyrillic ҫ look like ş and ç but are other characters to the tokenizer
+  'ș': 'ş'
+  'Ș': 'Ş'
+  'ҫ': 'ç'
+  'Ҫ': 'Ç'
+  # ê, î and û written with an inverted breve: zimanȇ
+  'ȇ': 'ê'
+  'ȋ': 'î'
+  'ȗ': 'û'
+# A pair whose question or answer matches one of these is dropped, counted under the name.
+# They are garbling with no single correct form. The context is not checked: it is not the
+# text a model is trained to write, and checking it would drop many more pairs.
+drop_patterns:
+  # Letters broken in the thesis PDFs. Ģ is ş (PiĢtî) and Ġ is Turkish İ (Ġsmail), but ġ is
+  # sometimes ş (ġêx) and sometimes the transliteration letter for Arabic gh (ġafil)
+  pdf_garbled_g_letters: '[ĢģġĠ]'
+  # î broken in the thesis PDFs: jì, Kurdì
+  pdf_garbled_i_grave: 'ì'
+  # The Arabic ayn broken into è (Seèîd, èUmer). French names (Dantès) keep it, since there
+  # it is followed by a consonant
+  pdf_garbled_ayn: 'è(?=[A-Zaiîuû])'
+  # “ and ” broken into ― and ‖ in the thesis PDFs: ―Ez … ‖
+  pdf_garbled_quotation_marks: '[―‖]'
+  # Footnote numbers turned into subscripts
+  pdf_footnote_subscripts: '[₀-₉]'
+  # Bullets and symbols from the PDFs' own fonts, invisible as text
+  pdf_private_use_characters: '[\ue000-\uf8ff]'
+  # Kurmanji typed on a Turkish keyboard, with ı for i: jı, bı, lı
+  kurmanji_typed_with_dotless_i: '\b(?:jı|bı|lı|dı|mın|kır)\b'
+  # Turkish ı, İ and ğ read in the wrong code page, like þ above. Not replaced: ý and ð are
+  # also real letters of Czech and Icelandic names in the pairs (Heyrovský, Óðinn)
+  turkish_letters_in_the_wrong_code_page: '[ýÝð]'
+  # No single correct form: ÿzdîya, ÿrîş
+  garbled_y_with_diaeresis: 'ÿ'
+  # Symbols some theses use for transliterated Arabic letters (Mu√ammed, Fa¡ilatun), and @
+  pdf_transliteration_symbols: '[√◊¡≥∂§@]'
