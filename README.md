@@ -202,6 +202,32 @@ dropped on GlotLID's say: on the first full run it called 764 of 33,073 question
 `kiu_Latn`, and the ones read were plain Kurmanji. `--dry-run` prints the counts and pushes
 nothing.
 
+```bash
+python -m scripts.clean            # writes the cleaned pairs to data/clean/
+python -m scripts.clean --push     # and pushes them as the kmr_Latn_clean subset
+```
+
+Its settings are in `clean.yml`. It cleans the pairs `push_hf` pushed (`dataset`, `subset`)
+and writes them as a subset of their own (`output_subset`), so the published pairs stay as they are. The
+thesis PDFs and some FineWeb2 pages have garbled letters, and a model trained on them
+learns to write them:
+
+| Step | What |
+|---|---|
+| Replace | Letters whose correct form is certain (`replacements`): `þ Þ` → `ş Ş` (Turkish text read in the wrong code page), `ÅŸ` → `ş` (UTF-8 decoded twice), `ș Ș` → `ş Ş` and `ҫ Ҫ` → `ç Ç` (Romanian and Cyrillic look-alikes), `ȇ ȋ ȗ` → `ê î û` |
+| Drop | A pair whose question or answer matches one of `drop_patterns`: garbling with no single correct form, such as `Ģ ġ Ġ` from the thesis PDFs (`ġ` is sometimes a broken `ş`, sometimes a real transliteration letter), broken quotation marks, subscript footnote numbers, font symbols, Kurmanji typed with Turkish `ı` (`jı`, `bı`), and `ý Ý ð`, which are also real letters in Czech and Icelandic names |
+
+The question, the answer and the context get the same replacements, so every answer is
+still a verbatim copy of its context. The context is not checked for drops: it is not the
+text a model learns to write, and checking it would drop many more pairs. Text is put in
+Unicode NFC first.
+
+On the first full run it kept 30,927 of 32,991 pairs and replaced 25,606 letters. The
+pairs go to `data/clean/<output_subset>/train-00000-of-00001.parquet`, the layout of a
+subset on the Hub, and the counts per pattern and per letter to `data/clean/stats.json`.
+`--push` pushes them to `dataset` with the token in `.env`, leaving the other
+subsets as they are.
+
 ## Tests
 
 ```bash
@@ -213,6 +239,7 @@ pipenv run pytest
 ```
 pipeline.py            runs the stages listed in config.yml
 config.yml             stage order and every stage setting
+clean.yml              settings of scripts/clean.py
 s5.jsonl               a 5-entry sample for classify.input_file
 kurdish_ins/
   stage.py             Stage base class, stage_config, run_name, load_manifest
